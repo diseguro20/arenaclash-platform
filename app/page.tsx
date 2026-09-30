@@ -2,8 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 export default function HomePage() {
+  const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [showModal, setShowModal] = useState(false);
   const [onlineCount, setOnlineCount] = useState(1420);
@@ -15,6 +17,7 @@ export default function HomePage() {
       .then((data) => {
         if (data?.user) {
           setUser(data.user);
+          router.push('/profile/me');
         }
       })
       .catch(() => {});

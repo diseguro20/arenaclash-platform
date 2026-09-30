@@ -1,96 +1,115 @@
 'use client';
 
-import { useState, useEffect, useRef, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import * as THREE from 'three';
+import confetti from 'canvas-confetti';
 
-interface RivalBot {
+interface PlayerProfile {
   name: string;
+  phone: string;
+  saldo: number;
+  bonus: number;
+  ouro: number;
+  rubi: number;
+  diamante: number;
   avatar: string;
-  charId: number;
-  lane: number;
-  progress: number;
-  speed: number;
-  targetLane: number;
-  laneChangeTimer: number;
-}
-
-interface TrackObstacle {
-  id: number;
-  z: number; // Distance from start (0 to 1500)
-  lane: number; // 0, 1, 2
-  type: 'cube_red' | 'cube_green' | 'cube_yellow' | 'boulder' | 'lava' | 'booster';
-  hit?: boolean;
-}
-
-interface TrackGem {
-  id: number;
-  z: number;
-  lane: number;
-  type: 'ouro' | 'rubi' | 'diamante';
-  collected?: boolean;
+  victories: number;
 }
 
 export default function GamePage() {
   const router = useRouter();
-  const [user, setUser] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<PlayerProfile>({
+    name: 'Diego Seguro',
+    phone: '11982854183',
+    saldo: 500.0,
+    bonus: 0.0,
+    ouro: 120,
+    rubi: 45,
+    diamante: 12,
+    avatar: '/images/character_1_25.webp',
+    victories: 8
+  });
 
-  // Navigation tabs in Lobby: 'maratona' | 'trio' | 'x1'
-  const [showModeModal, setShowModeModal] = useState(false);
-  const [showPartyModal, setShowPartyModal] = useState(false);
-  const [selectedTab, setSelectedTab] = useState<'maratona' | 'trio' | 'x1'>('maratona');
-  const [betAmount, setBetAmount] = useState('5');
-  const [selectedChar, setSelectedChar] = useState<number>(1);
-  const [startingRace, setStartingRace] = useState(false);
+  // Game UI State
+  const [activeScreen, setActiveScreen] = useState<'lobby' | 'modes' | 'customization' | 'friends' | 'playing' | 'victory'>('lobby');
+  const [selectedMode, setSelectedMode] = useState<'maratona' | 'trio' | 'x1'>('maratona');
+  const [selectedFee, setSelectedFee] = useState<number>(5.0);
+  const [selectedColor, setSelectedColor] = useState<string>('#ffffff');
+  const [selectedCharId, setSelectedCharId] = useState<number>(1);
+  const [customTab, setCustomTab] = useState<'colors' | 'accessories' | 'faces' | 'icons'>('colors');
+  const [roomCode, setRoomCode] = useState<string>('');
+  const [inputCode, setInputCode] = useState<string>('');
+  const [activeRaceId, setActiveRaceId] = useState<string>('');
 
-  // Game state: 'lobby' | 'playing' | 'gameover'
-  const [gameState, setGameState] = useState<'lobby' | 'playing' | 'gameover'>('lobby');
-  const [activeSession, setActiveSession] = useState<any>(null);
+  // In-Game State
+  const [currentRank, setCurrentRank] = useState<number>(1);
+  const [gemsCollected, setGemsCollected] = useState({ ouro: 0, rubi: 0, diamante: 0 });
+  const [raceProgress, setRaceProgress] = useState<number>(0); // 0 to 100
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [winnings, setWinnings] = useState<number>(0);
+  const [activePowerup, setActivePowerup] = useState<'rocket' | 'wings' | null>(null);
 
-  // HUD stats during race
-  const [currentRank, setCurrentRank] = useState(1);
-  const [raceGems, setRaceGems] = useState({ ouro: 0, rubi: 0, diamante: 0 });
-  const [playerRaceProgress, setPlayerRaceProgress] = useState(0); // 0 to 100
-  const [countdownText, setCountdownText] = useState<string | null>(null);
-  const [raceResult, setRaceResult] = useState<any>(null);
-  const [activeLaneIndex, setActiveLaneIndex] = useState(1); // 0: Left, 1: Center, 2: Right
+  // WebGL Container Ref
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const threeState = useRef<{
+    scene: THREE.Scene;
+    camera: THREE.PerspectiveCamera;
+    renderer: THREE.WebGLRenderer;
+    playerMesh: THREE.Group;
+    rivalMeshes: THREE.Group[];
+    obstacles: THREE.Group[];
+    collectibles: THREE.Group[];
+    animId: number;
+    clock: THREE.Clock;
+    playerLane: number; // -1: Left, 0: Center, 1: Right
+    targetX: number;
+    playerY: number;
+    playerZ: number;
+    isJumping: boolean;
+    jumpVelocity: number;
+    speed: number;
+    raceDistance: number;
+    isGameActive: boolean;
+    rivals: {
+      name: string;
+      mesh: THREE.Group;
+      lane: number;
+      z: number;
+      speed: number;
+      targetX: number;
+    }[];
+  } | null>(null);
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const animRef = useRef<number | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-
-  // Sound helper using Web Audio API
+  // Sound Synthesizer
   const playSfx = (type: 'beep' | 'go' | 'coin' | 'gem' | 'hit' | 'boost' | 'win') => {
     try {
-      if (!audioCtxRef.current) {
-        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      }
-      const ctx = audioCtxRef.current;
-      if (ctx.state === 'suspended') ctx.resume();
-
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
       gain.connect(ctx.destination);
-
       const now = ctx.currentTime;
+
       if (type === 'beep') {
         osc.frequency.setValueAtTime(440, now);
-        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.setValueAtTime(0.2, now);
         gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
         osc.start(now);
         osc.stop(now + 0.15);
       } else if (type === 'go') {
         osc.frequency.setValueAtTime(880, now);
-        gain.gain.setValueAtTime(0.25, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
         osc.start(now);
-        osc.stop(now + 0.35);
+        osc.stop(now + 0.4);
       } else if (type === 'coin') {
         osc.frequency.setValueAtTime(987.77, now);
         osc.frequency.setValueAtTime(1318.51, now + 0.08);
-        gain.gain.setValueAtTime(0.12, now);
+        gain.gain.setValueAtTime(0.15, now);
         gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
         osc.start(now);
         osc.stop(now + 0.2);
@@ -98,1362 +117,1306 @@ export default function GamePage() {
         osc.frequency.setValueAtTime(1200, now);
         osc.frequency.setValueAtTime(1600, now + 0.06);
         osc.frequency.setValueAtTime(2000, now + 0.12);
-        gain.gain.setValueAtTime(0.18, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
-        osc.start(now);
-        osc.stop(now + 0.3);
-      } else if (type === 'hit') {
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(150, now);
-        osc.frequency.exponentialRampToValueAtTime(50, now + 0.25);
-        gain.gain.setValueAtTime(0.3, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
-        osc.start(now);
-        osc.stop(now + 0.25);
-      } else if (type === 'boost') {
-        osc.frequency.setValueAtTime(300, now);
-        osc.frequency.exponentialRampToValueAtTime(900, now + 0.3);
         gain.gain.setValueAtTime(0.2, now);
         gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
         osc.start(now);
         osc.stop(now + 0.3);
+      } else if (type === 'boost') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(300, now);
+        osc.frequency.exponentialRampToValueAtTime(900, now + 0.5);
+        gain.gain.setValueAtTime(0.25, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+        osc.start(now);
+        osc.stop(now + 0.5);
+      } else if (type === 'hit') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(150, now);
+        osc.frequency.exponentialRampToValueAtTime(40, now + 0.3);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+        osc.start(now);
+        osc.stop(now + 0.3);
       } else if (type === 'win') {
-        const notes = [523.25, 659.25, 783.99, 1046.5];
-        notes.forEach((freq, idx) => {
-          const noteOsc = ctx.createOscillator();
-          const noteGain = ctx.createGain();
-          noteOsc.connect(noteGain);
-          noteGain.connect(ctx.destination);
-          noteOsc.frequency.setValueAtTime(freq, now + idx * 0.12);
-          noteGain.gain.setValueAtTime(0.2, now + idx * 0.12);
-          noteGain.gain.exponentialRampToValueAtTime(0.01, now + idx * 0.12 + 0.3);
-          noteOsc.start(now + idx * 0.12);
-          noteOsc.stop(now + idx * 0.12 + 0.3);
+        [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.frequency.setValueAtTime(freq, now + idx * 0.12);
+          g.gain.setValueAtTime(0.25, now + idx * 0.12);
+          g.gain.exponentialRampToValueAtTime(0.01, now + idx * 0.12 + 0.4);
+          o.start(now + idx * 0.12);
+          o.stop(now + idx * 0.12 + 0.4);
         });
       }
-    } catch (e) {
-      // Audio not permitted yet
-    }
+    } catch (_) {}
   };
 
-  // Fetch logged in user
+  // Fetch current user from session
   useEffect(() => {
     fetch('/api/auth/me')
-      .then((res) => {
-        if (!res.ok) throw new Error('Não autenticado');
-        return res.json();
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.user) {
+          setProfile(prev => ({
+            ...prev,
+            name: data.user.name || 'Diego Seguro',
+            phone: data.user.phone || '11982854183',
+            saldo: Number(data.user.saldo ?? 500),
+            bonus: Number(data.user.bonus ?? 0)
+          }));
+        }
       })
-      .then((data) => {
-        setUser(data.user);
-        setLoading(false);
-      })
-      .catch(() => {
-        router.push('/sign-in');
-      });
-  }, [router]);
+      .catch(() => {});
+  }, []);
 
-  // Start race call
-  const handleStartRace = async () => {
-    const val = Number(betAmount);
-    if (isNaN(val) || val < 1) {
-      alert('Aposta mínima de R$ 1,00.');
-      return;
-    }
-    if ((user?.saldo || 0) < val) {
-      alert('Saldo insuficiente! Faça um depósito para correr na arena.');
+  // START 3D THREE.JS GAME RUNNER
+  const startRace = (fee: number) => {
+    if (profile.saldo < fee) {
+      alert('Saldo insuficiente para entrar nesta corrida!');
       return;
     }
 
-    setStartingRace(true);
-    try {
-      const res = await fetch('/api/game/iniciar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          valor_entrada: val,
-          modalidade: selectedTab === 'maratona' ? 'classica' : selectedTab,
-          personagem: selectedChar,
-        }),
+    // Deduct entry fee & call backend iniciar
+    setProfile(prev => ({ ...prev, saldo: Math.max(0, prev.saldo - fee) }));
+    fetch('/api/game/iniciar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ valor_entrada: fee, modalidade: selectedMode, personagem: selectedCharId })
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.corrida_id) {
+          setActiveRaceId(data.corrida_id);
+          if (typeof data.saldo_restante === 'number') {
+            setProfile(prev => ({ ...prev, saldo: data.saldo_restante }));
+          }
+        }
+      })
+      .catch(() => {});
+
+    setActiveScreen('playing');
+    setGemsCollected({ ouro: 0, rubi: 0, diamante: 0 });
+    setRaceProgress(0);
+    setCurrentRank(1);
+    setActivePowerup(null);
+
+    // 3-2-1 Countdown
+    setCountdown(3);
+    playSfx('beep');
+    const cInterval = setInterval(() => {
+      setCountdown(prev => {
+        if (prev === 3) {
+          playSfx('beep');
+          return 2;
+        }
+        if (prev === 2) {
+          playSfx('beep');
+          return 1;
+        }
+        if (prev === 1) {
+          playSfx('go');
+          clearInterval(cInterval);
+          setTimeout(() => setCountdown(null), 500);
+          if (threeState.current) {
+            threeState.current.isGameActive = true;
+          }
+          return null;
+        }
+        return null;
+      });
+    }, 1000);
+  };
+
+  // Initialize Three.js Scene when entering 'playing' screen
+  useEffect(() => {
+    if (activeScreen !== 'playing' || !mountRef.current) return;
+
+    const width = mountRef.current.clientWidth;
+    const height = mountRef.current.clientHeight;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0e27);
+    scene.fog = new THREE.FogExp2(0x0a0e27, 0.015);
+
+    const camera = new THREE.PerspectiveCamera(65, width / height, 0.1, 1000);
+    camera.position.set(0, 4.2, 7.5);
+    camera.lookAt(0, 1.8, -10);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    mountRef.current.innerHTML = '';
+    mountRef.current.appendChild(renderer.domElement);
+
+    // Ambient & Directional Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xfff3cc, 1.8);
+    dirLight.position.set(10, 20, 15);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    // Glowing Point Lights for Cavern Atmosphere
+    const lavaLight = new THREE.PointLight(0xff5500, 2.5, 30);
+    lavaLight.position.set(0, -2, -30);
+    scene.add(lavaLight);
+
+    // 1. Build Cavern Tunnel
+    const tunnelGroup = new THREE.Group();
+    const trackWidth = 7.5;
+    const tunnelLength = 600;
+
+    // Track Floor
+    const floorGeo = new THREE.PlaneGeometry(trackWidth, tunnelLength, 1, 100);
+    const floorMat = new THREE.MeshStandardMaterial({
+      color: 0x181c2b,
+      roughness: 0.8,
+      metalness: 0.2
+    });
+    const floorMesh = new THREE.Mesh(floorGeo, floorMat);
+    floorMesh.rotation.x = -Math.PI / 2;
+    floorMesh.position.set(0, 0, -tunnelLength / 2 + 10);
+    floorMesh.receiveShadow = true;
+    tunnelGroup.add(floorMesh);
+
+    // Lane Dividers (Dashed Neon Yellow Lines)
+    [-1.25, 1.25].forEach(xPos => {
+      const lineGeo = new THREE.PlaneGeometry(0.12, tunnelLength);
+      const lineMat = new THREE.MeshBasicMaterial({ color: 0xffd700, transparent: true, opacity: 0.4 });
+      const lineMesh = new THREE.Mesh(lineGeo, lineMat);
+      lineMesh.rotation.x = -Math.PI / 2;
+      lineMesh.position.set(xPos, 0.02, -tunnelLength / 2 + 10);
+      tunnelGroup.add(lineMesh);
+    });
+
+    // Outer Cavern Tunnel Rock Walls (Curved Cylinder)
+    const cavernGeo = new THREE.CylinderGeometry(8, 8, tunnelLength, 24, 1, true, -Math.PI / 2, Math.PI);
+    const cavernMat = new THREE.MeshStandardMaterial({
+      color: 0x221a14,
+      roughness: 0.95,
+      metalness: 0.1,
+      side: THREE.BackSide
+    });
+    const cavernMesh = new THREE.Mesh(cavernGeo, cavernMat);
+    cavernMesh.rotation.z = Math.PI / 2;
+    cavernMesh.position.set(0, 2, -tunnelLength / 2 + 10);
+    tunnelGroup.add(cavernMesh);
+
+    // Glowing Side Energy Pillars with Warning Lights
+    for (let z = 0; z > -tunnelLength; z -= 15) {
+      [-trackWidth / 2 - 0.5, trackWidth / 2 + 0.5].forEach((xSide, sIdx) => {
+        const pillarGeo = new THREE.CylinderGeometry(0.18, 0.18, 5, 8);
+        const pillarMat = new THREE.MeshStandardMaterial({ color: 0x333b4d, metalness: 0.8 });
+        const pillar = new THREE.Mesh(pillarGeo, pillarMat);
+        pillar.position.set(xSide, 2.5, z);
+        tunnelGroup.add(pillar);
+
+        const beaconGeo = new THREE.SphereGeometry(0.25, 8, 8);
+        const beaconMat = new THREE.MeshBasicMaterial({ color: sIdx === 0 ? 0xff2222 : 0x00ffcc });
+        const beacon = new THREE.Mesh(beaconGeo, beaconMat);
+        beacon.position.set(xSide, 5, z);
+        tunnelGroup.add(beacon);
+      });
+    }
+
+    // Boiling Lava Pits
+    const lavaPits: THREE.Mesh[] = [];
+    const pitPositions = [-70, -180, -320, -450];
+    pitPositions.forEach(zPit => {
+      const lavaGeo = new THREE.PlaneGeometry(trackWidth + 2, 22);
+      const lavaMat = new THREE.MeshStandardMaterial({
+        color: 0xff3300,
+        emissive: 0xff2200,
+        emissiveIntensity: 1.2,
+        roughness: 0.3
+      });
+      const lava = new THREE.Mesh(lavaGeo, lavaMat);
+      lava.rotation.x = -Math.PI / 2;
+      lava.position.set(0, -0.2, zPit);
+      tunnelGroup.add(lava);
+      lavaPits.push(lava);
+    });
+
+    scene.add(tunnelGroup);
+
+    // 2. Helper to Build 3D Cute Robot Character
+    const createRobot = (bodyColor: string, isPlayer: boolean = false) => {
+      const bot = new THREE.Group();
+
+      // Head
+      const headGeo = new THREE.SphereGeometry(0.7, 16, 16);
+      const headMat = new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.3, roughness: 0.4 });
+      const head = new THREE.Mesh(headGeo, headMat);
+      head.position.y = 1.6;
+      head.castShadow = true;
+      bot.add(head);
+
+      // Face Visor Display
+      const visorGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.35, 16, 1, false, 0, Math.PI);
+      const visorMat = new THREE.MeshBasicMaterial({ color: 0x050c18 });
+      const visor = new THREE.Mesh(visorGeo, visorMat);
+      visor.rotation.x = Math.PI / 2;
+      visor.position.set(0, 1.6, 0.52);
+      bot.add(visor);
+
+      // Digital Glowing Eyes
+      const eyeGeo = new THREE.PlaneGeometry(0.18, 0.08);
+      const eyeMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
+      const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+      leftEye.position.set(-0.2, 1.62, 0.72);
+      bot.add(leftEye);
+
+      const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+      rightEye.position.set(0.2, 1.62, 0.72);
+      bot.add(rightEye);
+
+      // Antenna
+      const antStemGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.3, 8);
+      const antMat = new THREE.MeshStandardMaterial({ color: 0x8899aa });
+      const antStem = new THREE.Mesh(antStemGeo, antMat);
+      antStem.position.set(0, 2.4, 0);
+      bot.add(antStem);
+
+      const antBallGeo = new THREE.SphereGeometry(0.12, 8, 8);
+      const antBallMat = new THREE.MeshBasicMaterial({ color: 0x00e1ff });
+      const antBall = new THREE.Mesh(antBallGeo, antBallMat);
+      antBall.position.set(0, 2.6, 0);
+      bot.add(antBall);
+
+      // Torso
+      const bodyGeo = new THREE.CylinderGeometry(0.5, 0.4, 0.8, 16);
+      const body = new THREE.Mesh(bodyGeo, headMat);
+      body.position.y = 0.85;
+      body.castShadow = true;
+      bot.add(body);
+
+      // Jetpack on Back
+      const jetGeo = new THREE.CylinderGeometry(0.14, 0.14, 0.6, 8);
+      const jetMat = new THREE.MeshStandardMaterial({ color: 0x445566, metalness: 0.8 });
+      [-0.22, 0.22].forEach(jX => {
+        const jet = new THREE.Mesh(jetGeo, jetMat);
+        jet.position.set(jX, 0.9, -0.42);
+        bot.add(jet);
+
+        // Blue Jet Flame
+        const flameGeo = new THREE.ConeGeometry(0.12, 0.4, 8);
+        const flameMat = new THREE.MeshBasicMaterial({ color: 0x00d9ff, transparent: true, opacity: 0.85 });
+        const flame = new THREE.Mesh(flameGeo, flameMat);
+        flame.rotation.x = Math.PI;
+        flame.position.set(jX, 0.5, -0.42);
+        bot.add(flame);
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Erro ao entrar na arena.');
+      // Floating Pedestal if in lobby or standing
+      bot.scale.set(0.9, 0.9, 0.9);
+      return bot;
+    };
 
-      setActiveSession(data);
-      setUser((prev: any) => ({ ...prev, saldo: data.saldo_restante }));
-      setShowModeModal(false);
-      setRaceGems({ ouro: 0, rubi: 0, diamante: 0 });
-      setPlayerRaceProgress(0);
-      setCurrentRank(1);
-      setActiveLaneIndex(1);
-      setGameState('playing');
-    } catch (err: any) {
-      alert(err.message || 'Erro ao entrar na corrida.');
-    } finally {
-      setStartingRace(false);
+    // Spawn Player
+    const playerMesh = createRobot(selectedColor, true);
+    playerMesh.position.set(0, 0, 0);
+    scene.add(playerMesh);
+
+    // Spawn 4 Competitor Bots
+    const competitorBotsData = [
+      { name: 'Barry Allen', color: '#ffb300', lane: -1, z: 0, speed: 28 },
+      { name: 'Natalia', color: '#ff3366', lane: 1, z: 0, speed: 27.5 },
+      { name: 'Priscila', color: '#9933ff', lane: 0, z: 0, speed: 28.5 },
+      { name: 'Mateus do Grau', color: '#00cc66', lane: -1, z: 0, speed: 27 }
+    ];
+
+    const rivals = competitorBotsData.map(botData => {
+      const mesh = createRobot(botData.color, false);
+      const laneX = botData.lane * 2.2;
+      mesh.position.set(laneX, 0, botData.z);
+      scene.add(mesh);
+      return {
+        name: botData.name,
+        mesh,
+        lane: botData.lane,
+        z: botData.z,
+        speed: botData.speed,
+        targetX: laneX
+      };
+    });
+
+    // 3. Spawn Obstacles (3D Barricades with Red 'X', Yellow 'X', Green 'X' matching game-19 & game-24)
+    const obstacles: THREE.Group[] = [];
+    const laneXs = [-2.2, 0, 2.2];
+
+    for (let z = -25; z > -tunnelLength + 30; z -= 28) {
+      const blockGroup = new THREE.Group();
+      blockGroup.position.set(0, 0, z);
+
+      // Choose which lane is safe (Green 'X') or open
+      const safeLane = Math.floor(Math.random() * 3);
+
+      laneXs.forEach((lx, idx) => {
+        const isSafe = idx === safeLane;
+        const cubeGeo = new THREE.BoxGeometry(1.9, 2.4, 0.8);
+        const cubeMat = new THREE.MeshStandardMaterial({
+          color: isSafe ? 0x113322 : 0x2a1111,
+          metalness: 0.6,
+          roughness: 0.3
+        });
+        const cube = new THREE.Mesh(cubeGeo, cubeMat);
+        cube.position.set(lx, 1.2, 0);
+        cube.castShadow = true;
+        blockGroup.add(cube);
+
+        // Glowing 'X' Face
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#111';
+          ctx.fillRect(0, 0, 128, 128);
+          ctx.strokeStyle = isSafe ? '#00ff66' : (Math.random() > 0.5 ? '#ff2222' : '#ffcc00');
+          ctx.lineWidth = 20;
+          ctx.beginPath();
+          ctx.moveTo(25, 25);
+          ctx.lineTo(103, 103);
+          ctx.moveTo(103, 25);
+          ctx.lineTo(25, 103);
+          ctx.stroke();
+        }
+        const tex = new THREE.CanvasTexture(canvas);
+        const signGeo = new THREE.PlaneGeometry(1.6, 1.6);
+        const signMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+        const sign = new THREE.Mesh(signGeo, signMat);
+        sign.position.set(lx, 1.2, 0.42);
+        blockGroup.add(sign);
+
+        (cube as any).isSafe = isSafe;
+        (cube as any).laneIdx = idx;
+      });
+
+      scene.add(blockGroup);
+      obstacles.push(blockGroup);
+    }
+
+    // 4. Spawn Collectibles (Rotating Gold Coins, Blue Diamonds, Red Rubies, Rocket Boosters)
+    const collectibles: THREE.Group[] = [];
+    for (let z = -15; z > -tunnelLength + 20; z -= 8) {
+      const typeRand = Math.random();
+      const colGroup = new THREE.Group();
+      const chosenLaneX = laneXs[Math.floor(Math.random() * 3)];
+      colGroup.position.set(chosenLaneX, 1.2, z);
+
+      if (typeRand < 0.5) {
+        // Gold Coin (Ouro)
+        const coinGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.08, 16);
+        const coinMat = new THREE.MeshStandardMaterial({
+          color: 0xffd700,
+          metalness: 0.9,
+          roughness: 0.1,
+          emissive: 0xffaa00,
+          emissiveIntensity: 0.4
+        });
+        const coin = new THREE.Mesh(coinGeo, coinMat);
+        coin.rotation.x = Math.PI / 2;
+        colGroup.add(coin);
+        (colGroup as any).gemType = 'ouro';
+      } else if (typeRand < 0.75) {
+        // Red Ruby (Rubi)
+        const rubyGeo = new THREE.OctahedronGeometry(0.4, 0);
+        const rubyMat = new THREE.MeshStandardMaterial({
+          color: 0xff1144,
+          emissive: 0x990022,
+          emissiveIntensity: 0.6,
+          metalness: 0.5,
+          roughness: 0.1
+        });
+        const ruby = new THREE.Mesh(rubyGeo, rubyMat);
+        colGroup.add(ruby);
+        (colGroup as any).gemType = 'rubi';
+      } else if (typeRand < 0.92) {
+        // Blue Diamond (Diamante)
+        const diaGeo = new THREE.ConeGeometry(0.38, 0.55, 6);
+        const diaMat = new THREE.MeshStandardMaterial({
+          color: 0x00f0ff,
+          emissive: 0x0088cc,
+          emissiveIntensity: 0.8,
+          metalness: 0.8,
+          roughness: 0.05
+        });
+        const dia = new THREE.Mesh(diaGeo, diaMat);
+        dia.rotation.x = Math.PI;
+        colGroup.add(dia);
+        (colGroup as any).gemType = 'diamante';
+      } else {
+        // Rocket Booster Powerup
+        const rocketGeo = new THREE.ConeGeometry(0.3, 0.7, 8);
+        const rocketMat = new THREE.MeshStandardMaterial({ color: 0xff4400, emissive: 0xff2200 });
+        const rocket = new THREE.Mesh(rocketGeo, rocketMat);
+        colGroup.add(rocket);
+        (colGroup as any).gemType = 'rocket';
+      }
+
+      scene.add(colGroup);
+      collectibles.push(colGroup);
+    }
+
+    // Set Ref State
+    threeState.current = {
+      scene,
+      camera,
+      renderer,
+      playerMesh,
+      rivalMeshes: rivals.map(r => r.mesh),
+      obstacles,
+      collectibles,
+      animId: 0,
+      clock: new THREE.Clock(),
+      playerLane: 0,
+      targetX: 0,
+      playerY: 0,
+      playerZ: 0,
+      isJumping: false,
+      jumpVelocity: 0,
+      speed: 28.0,
+      raceDistance: tunnelLength - 30,
+      isGameActive: false,
+      rivals
+    };
+
+    // Key Listeners
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!threeState.current || !threeState.current.isGameActive) return;
+      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+        moveLane(-1);
+      } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+        moveLane(1);
+      } else if (e.key === ' ' || e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+        jump();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    // Window Resize Handler
+    const handleResize = () => {
+      if (!mountRef.current || !threeState.current) return;
+      const w = mountRef.current.clientWidth;
+      const h = mountRef.current.clientHeight;
+      threeState.current.camera.aspect = w / h;
+      threeState.current.camera.updateProjectionMatrix();
+      threeState.current.renderer.setSize(w, h);
+    };
+    window.addEventListener('resize', handleResize);
+
+    // Animation Loop
+    let lastTime = performance.now();
+    const animate = (time: number) => {
+      const delta = Math.min((time - lastTime) / 1000, 0.1);
+      lastTime = time;
+
+      const st = threeState.current;
+      if (!st) return;
+
+      if (st.isGameActive) {
+        // Move Forward
+        st.playerZ -= st.speed * delta;
+        st.playerMesh.position.z = st.playerZ;
+
+        // Smooth Lane Transition
+        st.playerMesh.position.x += (st.targetX - st.playerMesh.position.x) * 14 * delta;
+
+        // Banking Rotation during lane shift
+        const xDiff = st.targetX - st.playerMesh.position.x;
+        st.playerMesh.rotation.z = -xDiff * 0.25;
+
+        // Handle Jump / Gravity
+        if (st.isJumping) {
+          st.playerY += st.jumpVelocity * delta;
+          st.jumpVelocity -= 26 * delta; // Gravity
+          if (st.playerY <= 0) {
+            st.playerY = 0;
+            st.isJumping = false;
+            st.jumpVelocity = 0;
+          }
+        }
+        st.playerMesh.position.y = st.playerY;
+
+        // Move Camera with Player
+        st.camera.position.z = st.playerZ + 6.8;
+        st.camera.position.x = st.playerMesh.position.x * 0.45;
+        st.camera.position.y = 3.8 + st.playerY * 0.4;
+        st.camera.lookAt(st.playerMesh.position.x * 0.2, 1.6 + st.playerY * 0.2, st.playerZ - 12);
+
+        // Update Progress
+        const prog = Math.min(100, Math.floor((Math.abs(st.playerZ) / st.raceDistance) * 100));
+        setRaceProgress(prog);
+
+        // Move Competitor Bots
+        let aheadCount = 0;
+        st.rivals.forEach(bot => {
+          bot.z -= bot.speed * delta;
+          bot.mesh.position.z = bot.z;
+          // Random lane shift for AI bots
+          if (Math.random() < 0.015) {
+            const newLane = (Math.floor(Math.random() * 3) - 1);
+            bot.targetX = newLane * 2.2;
+          }
+          bot.mesh.position.x += (bot.targetX - bot.mesh.position.x) * 6 * delta;
+
+          if (bot.z < st.playerZ) {
+            aheadCount++;
+          }
+        });
+        setCurrentRank(aheadCount + 1);
+
+        // Rotate Collectibles & Check Pickups
+        st.collectibles.forEach(col => {
+          col.rotation.y += 3.5 * delta;
+          if (Math.abs(col.position.z - st.playerZ) < 1.4 && Math.abs(col.position.x - st.playerMesh.position.x) < 1.2) {
+            // Collision with collectible!
+            const gemType = (col as any).gemType;
+            if (gemType === 'ouro') {
+              playSfx('coin');
+              setGemsCollected(prev => ({ ...prev, ouro: prev.ouro + 1 }));
+            } else if (gemType === 'rubi') {
+              playSfx('gem');
+              setGemsCollected(prev => ({ ...prev, rubi: prev.rubi + 1 }));
+            } else if (gemType === 'diamante') {
+              playSfx('gem');
+              setGemsCollected(prev => ({ ...prev, diamante: prev.diamante + 1 }));
+            } else if (gemType === 'rocket') {
+              playSfx('boost');
+              setActivePowerup('rocket');
+              st.speed = 46.0;
+              setTimeout(() => {
+                if (threeState.current) threeState.current.speed = 28.0;
+                setActivePowerup(null);
+              }, 4000);
+            }
+            col.position.y = -999; // Remove from view
+          }
+        });
+
+        // Check Obstacle Collisions
+        st.obstacles.forEach(blockGrp => {
+          if (Math.abs(blockGrp.position.z - st.playerZ) < 1.3) {
+            blockGrp.children.forEach(child => {
+              if (child instanceof THREE.Mesh && (child as any).laneIdx !== undefined) {
+                const laneIdx = (child as any).laneIdx;
+                const isSafe = (child as any).isSafe;
+                const playerLaneIdx = st.playerLane + 1; // 0, 1, 2
+                if (playerLaneIdx === laneIdx && !isSafe && st.playerY < 1.4) {
+                  // Hit Red Obstacle!
+                  playSfx('hit');
+                  st.speed = Math.max(16, st.speed - 9);
+                  setTimeout(() => {
+                    if (threeState.current) threeState.current.speed = 28;
+                  }, 1200);
+                }
+              }
+            });
+          }
+        });
+
+        // Check Finish Line (CHEGADA)
+        if (Math.abs(st.playerZ) >= st.raceDistance) {
+          st.isGameActive = false;
+          const finalRank = aheadCount + 1;
+          const prizeMultiplier = finalRank === 1 ? 3.6 : (finalRank === 2 ? 1.8 : (finalRank === 3 ? 1.0 : 0));
+          const prizeMoney = Number((selectedFee * prizeMultiplier).toFixed(2));
+          setWinnings(prizeMoney);
+
+          if (finalRank === 1) {
+            playSfx('win');
+            confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
+          }
+
+          // Credit winnings & finalize race in Firebase backend
+          if (activeRaceId) {
+            fetch('/api/game/finalizar', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                corrida_id: activeRaceId,
+                posicao: finalRank,
+                ouro_coletado: gemsCollected.ouro,
+                rubi_coletado: gemsCollected.rubi,
+                diamante_coletado: gemsCollected.diamante,
+                tempo_segundos: 25
+              })
+            })
+              .then(res => res.ok ? res.json() : null)
+              .then(data => {
+                if (data?.saldo_atualizado !== undefined) {
+                  setProfile(prev => ({
+                    ...prev,
+                    saldo: Number(data.saldo_atualizado),
+                    victories: finalRank === 1 ? prev.victories + 1 : prev.victories
+                  }));
+                }
+              })
+              .catch(() => {});
+          } else if (prizeMoney > 0) {
+            setProfile(prev => ({
+              ...prev,
+              saldo: prev.saldo + prizeMoney,
+              victories: finalRank === 1 ? prev.victories + 1 : prev.victories
+            }));
+          }
+
+          setTimeout(() => {
+            setActiveScreen('victory');
+          }, 800);
+        }
+      }
+
+      st.renderer.render(st.scene, st.camera);
+      st.animId = requestAnimationFrame(animate);
+    };
+
+    threeState.current.animId = requestAnimationFrame(animate);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleResize);
+      if (threeState.current) {
+        cancelAnimationFrame(threeState.current.animId);
+        threeState.current.renderer.dispose();
+      }
+    };
+  }, [activeScreen, selectedColor, selectedFee]);
+
+  // Player Lane Switcher
+  const moveLane = (dir: -1 | 1) => {
+    if (!threeState.current || !threeState.current.isGameActive) return;
+    const newLane = Math.max(-1, Math.min(1, threeState.current.playerLane + dir));
+    threeState.current.playerLane = newLane;
+    threeState.current.targetX = newLane * 2.2;
+    playSfx('beep');
+  };
+
+  const setLaneExplicit = (lane: -1 | 0 | 1) => {
+    if (!threeState.current || !threeState.current.isGameActive) return;
+    threeState.current.playerLane = lane;
+    threeState.current.targetX = lane * 2.2;
+    playSfx('beep');
+  };
+
+  const jump = () => {
+    if (!threeState.current || !threeState.current.isGameActive) return;
+    if (!threeState.current.isJumping) {
+      threeState.current.isJumping = true;
+      threeState.current.jumpVelocity = 11.5;
+      playSfx('boost');
     }
   };
 
-  // --------------------------------------------------------------------------
-  // GAME ENGINE CANVAS
-  // --------------------------------------------------------------------------
-  useEffect(() => {
-    if (gameState !== 'playing' || !canvasRef.current || !activeSession) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    let width = (canvas.width = window.innerWidth);
-    let height = (canvas.height = window.innerHeight);
-
-    const onResize = () => {
-      width = canvas.width = window.innerWidth;
-      height = canvas.height = window.innerHeight;
-    };
-    window.addEventListener('resize', onResize);
-
-    // Character assets
-    const charImg = new Image();
-    charImg.src = `/images/character_${selectedChar}_${selectedChar + 24}.webp`;
-
-    const rivalImg1 = new Image();
-    rivalImg1.src = '/images/character_2_26.webp';
-
-    const rivalImg2 = new Image();
-    rivalImg2.src = '/images/character_3_27.webp';
-
-    const rivalImg3 = new Image();
-    rivalImg3.src = '/images/character_4_28.webp';
-
-    const rivalImg4 = new Image();
-    rivalImg4.src = '/images/character_1_25.webp';
-
-    const rivalImages = [rivalImg1, rivalImg2, rivalImg3, rivalImg4];
-
-    // Track total distance in meters
-    const TOTAL_TRACK_DISTANCE = 1600;
-
-    // Player state
-    let playerDistance = 0;
-    let targetLane = 1; // 0: Left, 1: Center, 2: Right
-    let currentLaneX = 1; // Smooth interpolate between lanes 0..2
-    let playerSpeed = 7.5; // Base speed
-    let isJumping = false;
-    let jumpY = 0;
-    let jumpVy = 0;
-    let speedBoostTimer = 0;
-    let hitSlowTimer = 0;
-
-    // Track lane positions in X percentage
-    const getLaneX = (lane: number, trackWidth: number, centerX: number) => {
-      const laneStep = trackWidth * 0.32;
-      return centerX + (lane - 1) * laneStep;
-    };
-
-    // Rivals state
-    const rivalsList: RivalBot[] = [
-      { name: 'NATALIA', avatar: 'N', charId: 2, lane: 0, progress: 0, speed: 7.2, targetLane: 0, laneChangeTimer: 100 },
-      { name: 'PRISCILA', avatar: 'P', charId: 3, lane: 2, progress: 0, speed: 7.3, targetLane: 2, laneChangeTimer: 140 },
-      { name: 'MATEUS DO', avatar: 'M', charId: 4, lane: 0, progress: 0, speed: 7.0, targetLane: 0, laneChangeTimer: 180 },
-      { name: 'BARRY ALLEN', avatar: 'B', charId: 1, lane: 2, progress: 0, speed: 7.4, targetLane: 2, laneChangeTimer: 220 },
-    ];
-
-    // Filter rivals based on mode
-    let activeRivals = rivalsList;
-    if (selectedTab === 'x1') activeRivals = [rivalsList[0]];
-    else if (selectedTab === 'trio') activeRivals = [rivalsList[0], rivalsList[1]];
-
-    // Generate Obstacles along the 1600m track
-    const obstacles: TrackObstacle[] = [];
-    for (let z = 180; z < TOTAL_TRACK_DISTANCE - 100; z += 90 + Math.random() * 50) {
-      const lane = Math.floor(Math.random() * 3);
-      const rand = Math.random();
-      let type: TrackObstacle['type'] = 'cube_red';
-      if (rand < 0.35) type = 'cube_red';
-      else if (rand < 0.55) type = 'boulder';
-      else if (rand < 0.75) type = 'lava';
-      else if (rand < 0.9) type = 'cube_green';
-      else type = 'booster';
-
-      obstacles.push({ id: obstacles.length, z, lane, type, hit: false });
-    }
-
-    // Generate Gems along the track
-    const gems: TrackGem[] = [];
-    for (let z = 120; z < TOTAL_TRACK_DISTANCE - 80; z += 40 + Math.random() * 30) {
-      const lane = Math.floor(Math.random() * 3);
-      const rand = Math.random();
-      let type: TrackGem['type'] = 'ouro';
-      if (rand > 0.88) type = 'diamante';
-      else if (rand > 0.65) type = 'rubi';
-
-      gems.push({ id: gems.length, z, lane, type, collected: false });
-    }
-
-    let collectedGold = 0;
-    let collectedRuby = 0;
-    let collectedDiamond = 0;
-
-    // Controls
-    const setLane = (newLane: number) => {
-      if (newLane < 0) newLane = 0;
-      if (newLane > 2) newLane = 2;
-      targetLane = newLane;
-      setActiveLaneIndex(newLane);
-    };
-
-    const doJump = () => {
-      if (!isJumping) {
-        isJumping = true;
-        jumpVy = 16;
-        playSfx('boost');
-      }
-    };
-
-    // Keyboard controls
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
-        setLane(targetLane - 1);
-      } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
-        setLane(targetLane + 1);
-      } else if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W' || e.key === ' ') {
-        doJump();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-
-    // Touch Swipe Controls
-    let touchStartX = 0;
-    let touchStartY = 0;
-    const onTouchStart = (e: TouchEvent) => {
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-    };
-    const onTouchEnd = (e: TouchEvent) => {
-      const dx = e.changedTouches[0].clientX - touchStartX;
-      const dy = e.changedTouches[0].clientY - touchStartY;
-      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 30) {
-        if (dx < 0) setLane(targetLane - 1);
-        else setLane(targetLane + 1);
-      } else if (dy < -30) {
-        doJump();
-      }
-    };
-    window.addEventListener('touchstart', onTouchStart);
-    window.addEventListener('touchend', onTouchEnd);
-
-    // Countdown before race start
-    let countdownState = 3;
-    setCountdownText('3');
-    playSfx('beep');
-
-    const cdInterval = setInterval(() => {
-      countdownState--;
-      if (countdownState === 2) {
-        setCountdownText('2');
-        playSfx('beep');
-      } else if (countdownState === 1) {
-        setCountdownText('1');
-        playSfx('beep');
-      } else if (countdownState === 0) {
-        setCountdownText('VAI!');
-        playSfx('go');
-      } else {
-        setCountdownText(null);
-        clearInterval(cdInterval);
-      }
-    }, 900);
-
-    // Finish race
-    let raceFinished = false;
-    const finishRace = async (finalPos: number) => {
-      if (raceFinished) return;
-      raceFinished = true;
-      playSfx('win');
-
-      try {
-        const res = await fetch('/api/game/finalizar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            corrida_id: activeSession.corrida_id,
-            posicao: finalPos,
-            ouro_coletado: collectedGold,
-            rubi_coletado: collectedRuby,
-            diamante_coletado: collectedDiamond,
-          }),
-        });
-        const data = await res.json();
-        setRaceResult(data);
-        setGameState('gameover');
-      } catch {
-        setRaceResult({ posicao: finalPos, valor_premio: 0, mensagem: 'Corrida finalizada!' });
-        setGameState('gameover');
-      }
-    };
-
-    // ------------------------------------------------------------------------
-    // MAIN RENDER LOOP (60 FPS)
-    // ------------------------------------------------------------------------
-    let frameCount = 0;
-    const render = () => {
-      frameCount++;
-      ctx.clearRect(0, 0, width, height);
-
-      // 1. Move Player & Rivals if countdown finished
-      if (countdownState <= 0 && !raceFinished) {
-        // Smooth lane interpolation
-        currentLaneX += (targetLane - currentLaneX) * 0.18;
-
-        // Speed modifications
-        let activeSpeed = playerSpeed;
-        if (speedBoostTimer > 0) {
-          activeSpeed *= 1.45;
-          speedBoostTimer--;
-        }
-        if (hitSlowTimer > 0) {
-          activeSpeed *= 0.65;
-          hitSlowTimer--;
-        }
-
-        playerDistance += activeSpeed;
-
-        // Jump physics
-        if (isJumping) {
-          jumpY += jumpVy;
-          jumpVy -= 0.85;
-          if (jumpY <= 0) {
-            jumpY = 0;
-            isJumping = false;
-          }
-        }
-
-        // Rivals AI logic
-        activeRivals.forEach((bot, bIdx) => {
-          // Normal speed with slight variation
-          bot.progress += bot.speed * (0.94 + (Math.sin(frameCount * 0.05 + bIdx) * 0.08));
-
-          // Random lane shift
-          bot.laneChangeTimer--;
-          if (bot.laneChangeTimer <= 0) {
-            bot.targetLane = Math.floor(Math.random() * 3);
-            bot.laneChangeTimer = 80 + Math.floor(Math.random() * 120);
-          }
-          bot.lane += (bot.targetLane - bot.lane) * 0.08;
-        });
-
-        // Calculate Rank Position
-        let aheadCount = 0;
-        activeRivals.forEach((bot) => {
-          if (bot.progress > playerDistance) aheadCount++;
-        });
-
-        // Influencer mode always finishes 1st
-        if (activeSession.is_influencer) {
-          aheadCount = 0;
-        }
-
-        const calculatedRank = aheadCount + 1;
-        setCurrentRank(calculatedRank);
-
-        // Update progress bar
-        const pct = Math.min(100, Math.floor((playerDistance / TOTAL_TRACK_DISTANCE) * 100));
-        setPlayerRaceProgress(pct);
-
-        // Check Finish Line
-        if (playerDistance >= TOTAL_TRACK_DISTANCE) {
-          finishRace(calculatedRank);
-        }
-      }
-
-      // ----------------------------------------------------------------------
-      // 2. DRAW 3D PERSPECTIVE CAVERN TUNNEL & TRACK
-      // ----------------------------------------------------------------------
-      const horizonY = height * 0.28;
-      const trackTopW = width * 0.28;
-      const trackBottomW = Math.min(width * 0.94, 620);
-      const trackLeftTop = width / 2 - trackTopW / 2;
-      const trackRightTop = width / 2 + trackTopW / 2;
-      const trackLeftBottom = width / 2 - trackBottomW / 2;
-      const trackRightBottom = width / 2 + trackBottomW / 2;
-
-      // Cavern Rocky Background
-      const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
-      bgGrad.addColorStop(0, '#020514');
-      bgGrad.addColorStop(0.3, '#0b162c');
-      bgGrad.addColorStop(1, '#050c18');
-      ctx.fillStyle = bgGrad;
-      ctx.fillRect(0, 0, width, height);
-
-      // Left & Right Cavern Rock Walls
-      const wallGradLeft = ctx.createLinearGradient(0, horizonY, trackLeftBottom, height);
-      wallGradLeft.addColorStop(0, '#1a130f');
-      wallGradLeft.addColorStop(0.5, '#2b1e17');
-      wallGradLeft.addColorStop(1, '#150d0a');
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(trackLeftTop, horizonY);
-      ctx.lineTo(trackLeftBottom, height);
-      ctx.lineTo(0, height);
-      ctx.closePath();
-      ctx.fillStyle = wallGradLeft;
-      ctx.fill();
-
-      // Right Cavern Rock Wall
-      const wallGradRight = ctx.createLinearGradient(width, horizonY, trackRightBottom, height);
-      wallGradRight.addColorStop(0, '#1a130f');
-      wallGradRight.addColorStop(0.5, '#2b1e17');
-      wallGradRight.addColorStop(1, '#150d0a');
-      ctx.beginPath();
-      ctx.moveTo(width, 0);
-      ctx.lineTo(trackRightTop, horizonY);
-      ctx.lineTo(trackRightBottom, height);
-      ctx.lineTo(width, height);
-      ctx.closePath();
-      ctx.fillStyle = wallGradRight;
-      ctx.fill();
-
-      // Cave ceiling arch & rocks
-      ctx.fillStyle = '#100a07';
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(width, 0);
-      ctx.lineTo(width, horizonY * 0.6);
-      ctx.quadraticCurveTo(width / 2, horizonY * 0.9, 0, horizonY * 0.6);
-      ctx.closePath();
-      ctx.fill();
-
-      // Glowing crystals on cavern walls
-      for (let i = 0; i < 6; i++) {
-        const py = horizonY + i * ((height - horizonY) / 6);
-        const pLeft = trackLeftTop + (trackLeftBottom - trackLeftTop) * (i / 6);
-        const pRight = trackRightTop + (trackRightBottom - trackRightTop) * (i / 6);
-
-        // Left crystal
-        ctx.fillStyle = i % 2 === 0 ? '#38bdf8' : '#f59e0b';
-        ctx.beginPath();
-        ctx.arc(pLeft - 22, py, 6, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Right crystal
-        ctx.fillStyle = i % 2 === 0 ? '#ec4899' : '#10b981';
-        ctx.beginPath();
-        ctx.arc(pRight + 22, py, 6, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // 3. Track Surface (Asphalt Mine Track)
-      const trackSurface = ctx.createLinearGradient(0, horizonY, 0, height);
-      trackSurface.addColorStop(0, '#111827');
-      trackSurface.addColorStop(0.7, '#1f2937');
-      trackSurface.addColorStop(1, '#111827');
-
-      ctx.beginPath();
-      ctx.moveTo(trackLeftTop, horizonY);
-      ctx.lineTo(trackRightTop, horizonY);
-      ctx.lineTo(trackRightBottom, height);
-      ctx.lineTo(trackLeftBottom, height);
-      ctx.closePath();
-      ctx.fillStyle = trackSurface;
-      ctx.fill();
-
-      // Glowing track neon borders (Cyan)
-      ctx.strokeStyle = '#00F0FF';
-      ctx.lineWidth = 3;
-      ctx.shadowColor = '#00F0FF';
-      ctx.shadowBlur = 12;
-      ctx.beginPath();
-      ctx.moveTo(trackLeftTop, horizonY);
-      ctx.lineTo(trackLeftBottom, height);
-      ctx.moveTo(trackRightTop, horizonY);
-      ctx.lineTo(trackRightBottom, height);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // 4. Track Lane Lines (Dashed moving white lines)
-      const offsetSpeed = (playerDistance * 2.5) % 80;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([14, 18]);
-      ctx.lineDashOffset = -offsetSpeed;
-
-      // Divider 1 (between Lane 0 and Lane 1)
-      const d1TopX = trackLeftTop + trackTopW * 0.333;
-      const d1BottomX = trackLeftBottom + trackBottomW * 0.333;
-      ctx.beginPath();
-      ctx.moveTo(d1TopX, horizonY);
-      ctx.lineTo(d1BottomX, height);
-      ctx.stroke();
-
-      // Divider 2 (between Lane 1 and Lane 2)
-      const d2TopX = trackLeftTop + trackTopW * 0.666;
-      const d2BottomX = trackLeftBottom + trackBottomW * 0.666;
-      ctx.beginPath();
-      ctx.moveTo(d2TopX, horizonY);
-      ctx.lineTo(d2BottomX, height);
-      ctx.stroke();
-      ctx.setLineDash([]); // Reset dash
-
-      // ----------------------------------------------------------------------
-      // 5. DRAW TRACK OBSTACLES & GEMS IN 3D PERSPECTIVE
-      // ----------------------------------------------------------------------
-      const renderDistanceView = 500; // Visible meters ahead
-
-      // Filter visible items
-      const visibleObstacles = obstacles.filter(
-        (ob) => ob.z >= playerDistance - 15 && ob.z <= playerDistance + renderDistanceView
-      );
-
-      const visibleGems = gems.filter(
-        (g) => !g.collected && g.z >= playerDistance - 15 && g.z <= playerDistance + renderDistanceView
-      );
-
-      // Sort back-to-front by z distance for proper depth sorting
-      const renderQueue = [
-        ...visibleObstacles.map((o) => ({ type: 'obstacle', data: o, z: o.z })),
-        ...visibleGems.map((g) => ({ type: 'gem', data: g, z: g.z })),
-      ].sort((a, b) => b.z - a.z);
-
-      renderQueue.forEach((item) => {
-        const relZ = item.z - playerDistance;
-        const depth = 1 - relZ / renderDistanceView; // 0 (far) to 1 (near)
-        if (depth < 0.05) return;
-
-        const currentTrackW = trackTopW + (trackBottomW - trackTopW) * depth;
-        const currentY = horizonY + (height - horizonY) * Math.pow(depth, 1.4);
-        const itemLane = item.data.lane;
-        const itemX = getLaneX(itemLane, currentTrackW, width / 2);
-
-        if (item.type === 'gem') {
-          const gem = item.data as TrackGem;
-          const gemScale = 14 + depth * 22;
-
-          // Bobbing float animation
-          const bob = Math.sin(frameCount * 0.1 + gem.id) * 6;
-
-          // Collision detection with player
-          if (
-            relZ < 25 &&
-            relZ > -10 &&
-            Math.abs(currentLaneX - itemLane) < 0.45 &&
-            !gem.collected
-          ) {
-            gem.collected = true;
-            if (gem.type === 'ouro') {
-              collectedGold++;
-              playSfx('coin');
-              setRaceGems((prev) => ({ ...prev, ouro: prev.ouro + 1 }));
-            } else if (gem.type === 'rubi') {
-              collectedRuby++;
-              playSfx('gem');
-              setRaceGems((prev) => ({ ...prev, rubi: prev.rubi + 1 }));
-            } else if (gem.type === 'diamante') {
-              collectedDiamond++;
-              playSfx('gem');
-              setRaceGems((prev) => ({ ...prev, diamante: prev.diamante + 1 }));
-            }
-          }
-
-          // Draw Gem shape
-          ctx.save();
-          ctx.translate(itemX, currentY + bob);
-          if (gem.type === 'ouro') {
-            ctx.fillStyle = '#FEDF19';
-            ctx.shadowColor = '#FEDF19';
-            ctx.shadowBlur = 10;
-            ctx.beginPath();
-            ctx.arc(0, 0, gemScale * 0.7, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.fillStyle = '#FFF';
-            ctx.font = `bold ${Math.max(8, gemScale * 0.6)}px sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('$', 0, 0);
-          } else if (gem.type === 'rubi') {
-            ctx.fillStyle = '#EF4444';
-            ctx.shadowColor = '#EF4444';
-            ctx.shadowBlur = 12;
-            ctx.beginPath();
-            ctx.moveTo(0, -gemScale * 0.8);
-            ctx.lineTo(gemScale * 0.7, 0);
-            ctx.lineTo(0, gemScale * 0.8);
-            ctx.lineTo(-gemScale * 0.7, 0);
-            ctx.closePath();
-            ctx.fill();
-          } else {
-            ctx.fillStyle = '#38BDF8';
-            ctx.shadowColor = '#38BDF8';
-            ctx.shadowBlur = 14;
-            ctx.beginPath();
-            ctx.moveTo(-gemScale * 0.6, -gemScale * 0.4);
-            ctx.lineTo(gemScale * 0.6, -gemScale * 0.4);
-            ctx.lineTo(0, gemScale * 0.7);
-            ctx.closePath();
-            ctx.fill();
-          }
-          ctx.restore();
-        } else if (item.type === 'obstacle') {
-          const ob = item.data as TrackObstacle;
-          const obScale = 20 + depth * 65;
-
-          // Collision detection with player
-          if (
-            relZ < 30 &&
-            relZ > -15 &&
-            Math.abs(currentLaneX - ob.lane) < 0.45 &&
-            !ob.hit
-          ) {
-            if (ob.type === 'booster') {
-              ob.hit = true;
-              speedBoostTimer = 90;
-              playSfx('boost');
-            } else if (!activeSession.is_influencer) {
-              if (ob.type === 'cube_red' || ob.type === 'boulder') {
-                if (!isJumping || jumpY < 25) {
-                  ob.hit = true;
-                  hitSlowTimer = 70;
-                  playSfx('hit');
-                }
-              } else if (ob.type === 'lava') {
-                if (!isJumping || jumpY < 20) {
-                  ob.hit = true;
-                  hitSlowTimer = 80;
-                  playSfx('hit');
-                }
-              }
-            }
-          }
-
-          // Draw Obstacle based on type
-          ctx.save();
-          ctx.translate(itemX, currentY);
-
-          if (ob.type === 'lava') {
-            // Flowing Magma pit across lane
-            const lavaW = currentTrackW * 0.32;
-            const lavaGrad = ctx.createLinearGradient(0, -10, 0, 20);
-            lavaGrad.addColorStop(0, '#FF4500');
-            lavaGrad.addColorStop(0.5, '#FFD700');
-            lavaGrad.addColorStop(1, '#FF1493');
-            ctx.fillStyle = lavaGrad;
-            ctx.shadowColor = '#FF4500';
-            ctx.shadowBlur = 16;
-            ctx.fillRect(-lavaW / 2, -12 * depth, lavaW, 24 * depth);
-            // Lava bubbles
-            ctx.fillStyle = '#FFF';
-            ctx.beginPath();
-            ctx.arc(
-              Math.sin(frameCount * 0.1) * (lavaW * 0.25),
-              0,
-              4 * depth,
-              0,
-              Math.PI * 2
-            );
-            ctx.fill();
-          } else if (ob.type === 'booster') {
-            // Neon Green Chevron >>>
-            ctx.fillStyle = '#22C55E';
-            ctx.shadowColor = '#22C55E';
-            ctx.shadowBlur = 14;
-            const arrowW = obScale * 0.7;
-            ctx.beginPath();
-            ctx.moveTo(0, -arrowW * 0.4);
-            ctx.lineTo(arrowW * 0.5, 0);
-            ctx.lineTo(0, arrowW * 0.4);
-            ctx.stroke();
-            ctx.font = `bold ${Math.max(10, obScale * 0.4)}px sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('⚡ 2X', 0, 0);
-          } else if (ob.type === 'boulder') {
-            // Falling rock
-            ctx.fillStyle = '#4B5563';
-            ctx.strokeStyle = '#1F2937';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(0, -obScale * 0.3, obScale * 0.45, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-          } else {
-            // 3D Neon Barrier Cube with X
-            const cubeW = obScale * 0.85;
-            const cubeH = obScale * 0.95;
-            const isRed = ob.type === 'cube_red';
-            const isGreen = ob.type === 'cube_green';
-            const color = isRed ? '#EF4444' : isGreen ? '#22C55E' : '#F59E0B';
-
-            // Cube body
-            ctx.fillStyle = '#1F2937';
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 2.5;
-            ctx.shadowColor = color;
-            ctx.shadowBlur = 10;
-            ctx.fillRect(-cubeW / 2, -cubeH, cubeW, cubeH);
-            ctx.strokeRect(-cubeW / 2, -cubeH, cubeW, cubeH);
-
-            // Glowing X symbol
-            ctx.fillStyle = color;
-            ctx.font = `black ${Math.max(12, cubeW * 0.65)}px sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('X', 0, -cubeH * 0.5);
-          }
-          ctx.restore();
-        }
-      });
-
-      // ----------------------------------------------------------------------
-      // 6. DRAW RIVAL ROBOTS RACING AHEAD / BEHIND
-      // ----------------------------------------------------------------------
-      activeRivals.forEach((bot, bIdx) => {
-        const relZ = bot.progress - playerDistance;
-        // Visible within render window
-        if (relZ >= -30 && relZ <= renderDistanceView) {
-          const depth = Math.max(0.08, Math.min(1.1, 1 - relZ / renderDistanceView));
-          const currentTrackW = trackTopW + (trackBottomW - trackTopW) * depth;
-          const botY = horizonY + (height - horizonY) * Math.pow(depth, 1.4);
-          const botX = getLaneX(bot.lane, currentTrackW, width / 2);
-
-          const botW = Math.max(22, 95 * depth);
-          const botH = Math.max(26, 110 * depth);
-
-          ctx.save();
-          ctx.translate(botX, botY);
-
-          // Jetpack thrusters
-          const flameSize = 10 * depth * (1 + Math.sin(frameCount * 0.3 + bIdx) * 0.3);
-          ctx.fillStyle = '#00F0FF';
-          ctx.shadowColor = '#00F0FF';
-          ctx.shadowBlur = 10;
-          ctx.beginPath();
-          ctx.arc(-botW * 0.22, botH * 0.2, flameSize, 0, Math.PI * 2);
-          ctx.arc(botW * 0.22, botH * 0.2, flameSize, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.shadowBlur = 0;
-
-          // Draw Bot Image
-          const bImg = rivalImages[bIdx % rivalImages.length];
-          if (bImg.complete && bImg.naturalWidth > 0) {
-            ctx.drawImage(bImg, -botW / 2, -botH, botW, botH);
-          } else {
-            ctx.fillStyle = '#60A5FA';
-            ctx.beginPath();
-            ctx.arc(0, -botH / 2, botW / 2, 0, Math.PI * 2);
-            ctx.fill();
-          }
-
-          // Rival Player Name tag
-          ctx.fillStyle = '#FEDF19';
-          ctx.font = `bold ${Math.max(8, 12 * depth)}px sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.shadowColor = '#000';
-          ctx.shadowBlur = 4;
-          ctx.fillText(bot.name, 0, -botH - 4);
-          ctx.shadowBlur = 0;
-
-          ctx.restore();
-        }
-      });
-
-      // ----------------------------------------------------------------------
-      // 7. DRAW PLAYER ROBOT (Authentic Back View with Jet Thrusters)
-      // ----------------------------------------------------------------------
-      const playerY = height - 130 - jumpY;
-      const playerTrackW = trackBottomW;
-      const playerX = getLaneX(currentLaneX, playerTrackW, width / 2);
-
-      const pW = 105;
-      const pH = 120;
-
-      ctx.save();
-      ctx.translate(playerX, playerY);
-
-      // Shadow on track (shrinks when jumping)
-      const shadowScale = Math.max(0.3, 1 - jumpY / 120);
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-      ctx.beginPath();
-      ctx.ellipse(0, 15 + jumpY * 0.8, pW * 0.35 * shadowScale, 10 * shadowScale, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Dual Blue Jetpack Thruster Flames
-      const thrusterPulse = 14 + Math.sin(frameCount * 0.4) * 5;
-      const thrusterGrad = ctx.createLinearGradient(0, 0, 0, 30);
-      thrusterGrad.addColorStop(0, '#00F0FF');
-      thrusterGrad.addColorStop(0.7, '#3B82F6');
-      thrusterGrad.addColorStop(1, 'transparent');
-
-      ctx.fillStyle = thrusterGrad;
-      ctx.shadowColor = '#00F0FF';
-      ctx.shadowBlur = 16;
-      ctx.beginPath();
-      ctx.arc(-pW * 0.22, 8, thrusterPulse * 0.6, 0, Math.PI * 2);
-      ctx.arc(pW * 0.22, 8, thrusterPulse * 0.6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // Draw Player Robot Character
-      if (charImg.complete && charImg.naturalWidth > 0) {
-        ctx.drawImage(charImg, -pW / 2, -pH, pW, pH);
-      } else {
-        ctx.fillStyle = '#38BDF8';
-        ctx.beginPath();
-        ctx.arc(0, -pH / 2, pW / 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      ctx.restore();
-
-      // Loop
-      animRef.current = requestAnimationFrame(render);
-    };
-
-    animRef.current = requestAnimationFrame(render);
-
-    return () => {
-      if (animRef.current) cancelAnimationFrame(animRef.current);
-      clearInterval(cdInterval);
-      window.removeEventListener('resize', onResize);
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('touchstart', onTouchStart);
-      window.removeEventListener('touchend', onTouchEnd);
-    };
-  }, [gameState, activeSession, selectedTab, selectedChar]);
-
-  // Loading screen
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#060D2A] flex flex-col items-center justify-center text-white">
-        <div className="w-12 h-12 border-4 border-[#FEDF19] border-t-transparent rounded-full animate-spin mb-4" />
-        <p className="font-lilita text-lg uppercase tracking-wider">Carregando Arena Clash...</p>
-      </div>
-    );
-  }
-
   return (
-    <div className="relative min-h-screen bg-[#060D2A] font-sans select-none overflow-hidden">
-      {/* -------------------------------------------------------------------- */}
-      {/* 1. LOBBY VIEW (Matching game-01-1_webp_71.webp) */}
-      {/* -------------------------------------------------------------------- */}
-      {gameState === 'lobby' && (
-        <div
-          className="relative min-h-screen flex flex-col justify-between bg-cover bg-center overflow-y-auto"
-          style={{ backgroundImage: "url('/images/game-01-1_webp_71.webp')" }}
-        >
-          {/* Subtle overlay for crisp contrast */}
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] z-0" />
+    <div className="relative w-full h-screen bg-[#060D2A] text-white overflow-hidden select-none flex justify-center items-center">
+      {/* MOBILE CONTAINER WRAPPER (Smartphone frame on desktop, fullscreen on mobile) */}
+      <div className="relative w-full max-w-[440px] h-full sm:h-[92vh] sm:rounded-3xl shadow-2xl overflow-hidden bg-[#0A1640] border-0 sm:border-4 sm:border-slate-800 flex flex-col font-lilita">
 
-          {/* TOP BAR: Profile Card & Balance */}
-          <header className="relative z-10 px-4 pt-3 flex items-center justify-between">
-            {/* User Profile */}
-            <div className="flex items-center gap-3 bg-black/60 border border-white/20 px-3 py-1.5 rounded-2xl backdrop-blur-md shadow-lg">
-              <div className="relative w-11 h-11 bg-gradient-to-br from-blue-500 to-indigo-700 rounded-full border-2 border-white flex items-center justify-center font-lilita text-xl text-white shadow-md">
-                {user?.nome ? user.nome.charAt(0).toUpperCase() : 'U'}
-                <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full border-2 border-black" />
-              </div>
-              <div>
-                <div className="font-lilita text-white text-base tracking-wide flex items-center gap-1.5">
-                  {user?.nome || 'Piloto Arena'}
-                  {user?.is_admin && (
-                    <span className="text-[10px] bg-red-600 text-white font-extrabold px-1.5 py-0.5 rounded uppercase">
-                      Admin
-                    </span>
-                  )}
+        {/* ============================================================== */}
+        {/* 1. LOBBY SCREEN (Exact replication of game-01-1_webp_71.webp) */}
+        {/* ============================================================== */}
+        {activeScreen === 'lobby' && (
+          <div className="relative w-full h-full flex flex-col justify-between p-4 bg-gradient-to-b from-[#0c1e54] via-[#10307c] to-[#0a469a]">
+            {/* Header: Profile, SACAR/DEPOSITAR, Saldo */}
+            <div className="flex justify-between items-start pt-2 z-20">
+              {/* User Avatar + Name + Buttons */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="relative w-12 h-12 rounded-full border-2 border-white overflow-hidden bg-blue-500 shadow-md">
+                    <img src={profile.avatar} alt="Avatar" className="w-full h-full object-cover" />
+                    <button
+                      onClick={() => setActiveScreen('customization')}
+                      className="absolute bottom-0 right-0 w-4 h-4 bg-amber-400 rounded-full flex items-center justify-center text-[10px] text-black shadow"
+                    >
+                      ✏️
+                    </button>
+                  </div>
+                  <div>
+                    <h2 className="text-base text-white stroke-black-2 leading-tight uppercase font-extrabold">
+                      {profile.name}
+                    </h2>
+                  </div>
                 </div>
-                <div className="text-[11px] text-emerald-400 font-bold">Online na Arena</div>
+
+                {/* SACAR & DEPOSITAR Quick Pills */}
+                <div className="flex flex-col gap-1.5 w-24">
+                  <Link
+                    href="/profile/me?tab=saque"
+                    className="flex items-center justify-between px-2.5 py-0.5 rounded-md bg-white text-black font-extrabold text-[11px] shadow border border-slate-300 hover:bg-slate-100 uppercase"
+                  >
+                    <span>SACAR</span>
+                    <span className="text-red-500 font-black text-xs">▲</span>
+                  </Link>
+                  <Link
+                    href="/profile/me?tab=deposito"
+                    className="flex items-center justify-between px-2.5 py-0.5 rounded-md bg-white text-black font-extrabold text-[11px] shadow border border-slate-300 hover:bg-slate-100 uppercase"
+                  >
+                    <span>DEPOSITAR</span>
+                    <span className="text-emerald-500 font-black text-xs">▼</span>
+                  </Link>
+                </div>
+              </div>
+
+              {/* Saldo & Locked Quick Buttons */}
+              <div className="flex flex-col items-end gap-3">
+                {/* Money Container */}
+                <div className="bg-[#1e1005] border-2 border-[#543310] px-3.5 py-1.5 rounded-xl shadow-lg flex items-center gap-2">
+                  <div className="text-right">
+                    <div className="text-white text-base font-extrabold tracking-wider">
+                      R$ {profile.saldo.toFixed(2)}
+                    </div>
+                    <div className="text-yellow-400 text-[10px] font-bold">
+                      Bônus: R$ {profile.bonus.toFixed(2)}
+                    </div>
+                  </div>
+                  <span className="text-2xl">💵</span>
+                </div>
+
+                {/* Right Floating Badges (Campeões, Mensagens, Presentes) */}
+                <div className="flex flex-col gap-2">
+                  <button className="flex flex-col items-center justify-center w-12 h-12 bg-blue-700/80 border-2 border-blue-400 rounded-xl shadow text-white hover:brightness-110 active:scale-95">
+                    <span className="text-base">🏆</span>
+                    <span className="text-[9px] uppercase tracking-tighter">Campeões</span>
+                  </button>
+                  <button className="flex flex-col items-center justify-center w-12 h-12 bg-blue-600/90 border-2 border-cyan-400 rounded-xl shadow text-white hover:brightness-110 active:scale-95">
+                    <span className="text-base">📢</span>
+                    <span className="text-[9px] uppercase tracking-tighter">Mensagens</span>
+                  </button>
+                  <button className="flex flex-col items-center justify-center w-12 h-12 bg-blue-700/80 border-2 border-blue-400 rounded-xl shadow text-white hover:brightness-110 active:scale-95">
+                    <span className="text-base">🎁</span>
+                    <span className="text-[9px] uppercase tracking-tighter">Presentes</span>
+                  </button>
+                </div>
               </div>
             </div>
 
-            {/* Wallet Cash Balance */}
-            <div className="bg-[#2D1606]/90 border-2 border-[#FEDF19]/60 px-4 py-1.5 rounded-2xl flex flex-col items-end shadow-lg backdrop-blur-md">
-              <div className="flex items-center gap-2">
-                <span className="font-lilita text-xl text-[#FEDF19] tracking-wider">
-                  R$ {(user?.saldo ?? 0).toFixed(2).replace('.', ',')}
-                </span>
-                <span className="text-xl">💵</span>
-              </div>
-              <div className="text-[10px] text-white/70 font-bold">
-                Bônus: R$ {(user?.saldo_bonus ?? 0).toFixed(2).replace('.', ',')}
-              </div>
-            </div>
-          </header>
-
-          {/* LEFT & RIGHT QUICK ACTION BUTTONS */}
-          <div className="relative z-10 px-4 flex justify-between items-start pointer-events-none mt-2">
-            {/* Left Column: SACAR / DEPOSITAR */}
-            <div className="flex flex-col gap-2.5 pointer-events-auto">
-              <button
-                onClick={() => router.push('/profile/me?tab=saque')}
-                className="w-24 h-11 bg-gradient-to-b from-gray-100 to-gray-300 hover:from-white hover:to-gray-200 border-2 border-black rounded-xl font-lilita text-xs uppercase tracking-wider text-black flex items-center justify-center gap-1 shadow-md active:scale-95 transition-all"
-              >
-                <span className="text-red-600 text-sm">▲</span> SACAR
-              </button>
-
-              <button
-                onClick={() => router.push('/profile/me?tab=deposito')}
-                className="w-24 h-11 bg-gradient-to-b from-gray-100 to-gray-300 hover:from-white hover:to-gray-200 border-2 border-black rounded-xl font-lilita text-xs uppercase tracking-wider text-black flex items-center justify-center gap-1 shadow-md active:scale-95 transition-all"
-              >
-                <span className="text-emerald-600 text-sm">▼</span> DEPOSITAR
-              </button>
-            </div>
-
-            {/* Right Column: Campeões / Mensagens */}
-            <div className="flex flex-col gap-2.5 pointer-events-auto items-end">
-              <button
-                onClick={() => router.push('/profile/me?tab=ranking')}
-                className="w-11 h-11 bg-blue-600/90 border-2 border-white rounded-xl flex items-center justify-center shadow-md active:scale-95 transition-all text-xl"
-                title="Ranking Campeões"
-              >
-                🏆
-              </button>
-              <button
-                onClick={() => window.open('https://wa.link/5obr8i', '_blank')}
-                className="w-11 h-11 bg-cyan-600/90 border-2 border-white rounded-xl flex items-center justify-center shadow-md active:scale-95 transition-all text-xl"
-                title="Mensagens / Suporte"
-              >
-                📢
-              </button>
-            </div>
-          </div>
-
-          {/* CENTER: 3D PEDESTAL & ROBOT SHOWCASE */}
-          <div className="relative z-10 flex flex-col items-center justify-center my-auto py-4">
-            <div className="relative flex flex-col items-center">
-              {/* Character Floating on Base */}
-              <div className="relative w-44 h-48 flex items-center justify-center animate-bounce duration-1000">
+            {/* Central Pedestal & 3D Robot Character Preview */}
+            <div className="relative flex-1 flex flex-col items-center justify-center z-10">
+              <div className="relative flex flex-col items-center animate-bounce-gentle">
                 <img
-                  src={`/images/character_${selectedChar}_${selectedChar + 24}.webp`}
-                  alt="Robot Runner"
-                  className="w-36 h-auto drop-shadow-[0_15px_25px_rgba(0,0,0,0.8)]"
+                  src={`/images/character_${selectedCharId}_${24 + selectedCharId}.webp`}
+                  alt="Robot"
+                  className="w-48 h-48 object-contain drop-shadow-[0_15px_25px_rgba(0,0,0,0.6)]"
+                />
+                <img
+                  src="/images/base_24.webp"
+                  alt="Pedestal"
+                  className="w-64 h-auto -mt-10 object-contain drop-shadow-2xl"
                 />
               </div>
-
-              {/* Pedestal Base */}
-              <div className="-mt-10 w-56 h-auto">
-                <img src="/images/base_24.webp" alt="Pedestal" className="w-full h-auto drop-shadow-2xl" />
-              </div>
-
-              {/* Character Selector Chips */}
-              <div className="flex gap-2 mt-4 bg-black/60 p-1.5 rounded-full border border-white/20 backdrop-blur-md">
-                {[1, 2, 3, 4].map((id) => (
-                  <button
-                    key={id}
-                    onClick={() => setSelectedChar(id)}
-                    className={`w-9 h-9 rounded-full border-2 transition-all flex items-center justify-center font-lilita text-xs ${
-                      selectedChar === id
-                        ? 'border-[#FEDF19] bg-[#FEDF19] text-black scale-110 shadow-lg'
-                        : 'border-white/30 bg-black/40 text-white'
-                    }`}
-                  >
-                    #{id}
-                  </button>
-                ))}
-              </div>
             </div>
-          </div>
 
-          {/* BOTTOM BUTTONS & ACTIONS */}
-          <div className="relative z-10 px-4 pb-2 space-y-3 max-w-md mx-auto w-full">
-            {/* Mode Actions */}
-            <div className="grid grid-cols-2 gap-3">
-              {/* VS Jogar com Amigos */}
+            {/* Action Buttons: "VS Jogar com Amigos" & "JOGAR" */}
+            <div className="flex items-center gap-3 px-2 mb-3 z-20">
               <button
-                onClick={() => setShowPartyModal(true)}
-                className="h-16 bg-[#2B7BE4] hover:bg-[#256ecf] text-white font-lilita text-base uppercase rounded-2xl border-4 border-black flex items-center justify-center gap-1.5 shadow-[0_6px_0_#17488b] active:translate-y-1 active:shadow-none transition-all"
+                onClick={() => setActiveScreen('friends')}
+                className="flex-1 h-14 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white rounded-2xl border-4 border-black shadow-[0_6px_0_#000] active:translate-y-1 active:shadow-none flex items-center justify-center gap-2 text-sm tracking-wider uppercase"
               >
-                <span className="text-xl">🎮</span>
-                <span className="text-center leading-tight">Jogar com<br />Amigos</span>
+                <span className="italic font-black text-lg text-yellow-300">VS</span>
+                <span className="stroke-black-3 text-center leading-tight">Jogar com<br />Amigos</span>
               </button>
 
-              {/* Big Yellow JOGAR Button */}
               <button
-                onClick={() => setShowModeModal(true)}
-                className="h-16 bg-gradient-to-b from-[#FEDF19] to-[#E6A800] hover:from-[#FFE642] hover:to-[#FEDF19] text-black font-lilita text-2xl uppercase tracking-wider rounded-2xl border-4 border-black flex items-center justify-center gap-2 shadow-[0_6px_0_#996f00] active:translate-y-1 active:shadow-none transition-all animate-pulse"
+                onClick={() => setActiveScreen('modes')}
+                className="flex-1 h-14 bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-300 hover:to-yellow-400 text-white rounded-2xl border-4 border-black shadow-[0_6px_0_#000] active:translate-y-1 active:shadow-none flex items-center justify-center gap-2 text-2xl tracking-widest uppercase stroke-black-4"
               >
-                <span>⚔️</span> JOGAR
+                <span>⚔️</span>
+                <span>JOGAR</span>
               </button>
             </div>
 
-            {/* Bottom Nav Bar (Itens, Ranking, Loja, Amigos, Missões) */}
-            <nav className="h-14 bg-black/70 border-2 border-white/20 rounded-2xl backdrop-blur-md flex items-center justify-around px-2 shadow-2xl">
+            {/* Bottom Bar: Itens, Ranking, Loja, Amigos, Missões */}
+            <div className="grid grid-cols-5 gap-1 pt-2 border-t border-white/20 z-20 bg-blue-950/70 -mx-4 -mb-4 px-3 pb-3">
               <button
-                onClick={() => router.push('/profile/me')}
-                className="flex flex-col items-center gap-0.5 text-white/80 hover:text-white"
+                onClick={() => setActiveScreen('customization')}
+                className="flex flex-col items-center justify-center py-1 text-white hover:text-yellow-400"
               >
-                <span className="text-base">🎒</span>
-                <span className="font-lilita text-[10px] uppercase">Itens</span>
+                <span className="text-xl">🎒</span>
+                <span className="text-[10px] tracking-tight uppercase">Itens</span>
+              </button>
+              <Link
+                href="/profile/me?tab=ranking"
+                className="flex flex-col items-center justify-center py-1 text-white hover:text-yellow-400"
+              >
+                <span className="text-xl">👑</span>
+                <span className="text-[10px] tracking-tight uppercase">Ranking</span>
+              </Link>
+              <button className="flex flex-col items-center justify-center py-1 text-white/50 cursor-not-allowed">
+                <span className="text-xl">🏪</span>
+                <span className="text-[10px] tracking-tight uppercase">Loja</span>
               </button>
               <button
-                onClick={() => router.push('/profile/me?tab=ranking')}
-                className="flex flex-col items-center gap-0.5 text-[#FEDF19] hover:text-yellow-300"
+                onClick={() => setActiveScreen('friends')}
+                className="flex flex-col items-center justify-center py-1 text-white hover:text-yellow-400"
               >
-                <span className="text-base">👑</span>
-                <span className="font-lilita text-[10px] uppercase">Ranking</span>
+                <span className="text-xl">👥</span>
+                <span className="text-[10px] tracking-tight uppercase">Amigos</span>
               </button>
-              <button
-                onClick={() => router.push('/profile/me?tab=afiliado')}
-                className="flex flex-col items-center gap-0.5 text-white/80 hover:text-white"
-              >
-                <span className="text-base">👥</span>
-                <span className="font-lilita text-[10px] uppercase">Afiliados</span>
+              <button className="flex flex-col items-center justify-center py-1 text-white/50 cursor-not-allowed">
+                <span className="text-xl">🎯</span>
+                <span className="text-[10px] tracking-tight uppercase">Missões</span>
               </button>
-              <button
-                onClick={() => router.push('/profile/me')}
-                className="flex flex-col items-center gap-0.5 text-white/80 hover:text-white"
-              >
-                <span className="text-base">⚙️</span>
-                <span className="font-lilita text-[10px] uppercase">Painel</span>
-              </button>
-            </nav>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* -------------------------------------------------------------------- */}
-      {/* 2. MODE SELECTOR MODAL (Matching game-02-1, game-03-1, game-04) */}
-      {/* -------------------------------------------------------------------- */}
-      {showModeModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn">
-          <div className="relative w-full max-w-md bg-[#0A2540] border-4 border-black rounded-3xl p-5 shadow-[0_20px_50px_rgba(0,0,0,0.9)] flex flex-col gap-4">
-            {/* Close Button */}
-            <button
-              onClick={() => setShowModeModal(false)}
-              className="absolute -top-3 -right-3 w-10 h-10 bg-red-600 border-2 border-black rounded-full text-white font-lilita text-lg flex items-center justify-center shadow-lg active:scale-95"
-            >
-              ✕
-            </button>
-
-            {/* Modal Header Tabs */}
-            <div className="flex border-b-2 border-white/20 pb-2 gap-2">
+        {/* ============================================================== */}
+        {/* 2. MODE SELECTION SCREEN (Replication of game-02-1_webp_72.webp)*/}
+        {/* ============================================================== */}
+        {activeScreen === 'modes' && (
+          <div className="relative w-full h-full flex flex-col justify-between p-4 bg-[#0A1640]">
+            {/* Header: Back Button + Balance */}
+            <div className="flex justify-between items-center pt-2">
               <button
-                onClick={() => setSelectedTab('maratona')}
-                className={`flex-1 py-1.5 rounded-xl font-lilita text-sm uppercase transition-all ${
-                  selectedTab === 'maratona'
-                    ? 'bg-[#FEDF19] text-black border-2 border-black shadow-md'
-                    : 'text-white/70 hover:text-white'
-                }`}
+                onClick={() => setActiveScreen('lobby')}
+                className="w-10 h-10 rounded-xl bg-slate-700/80 border-2 border-slate-500 text-white flex items-center justify-center text-lg active:scale-95 shadow"
+              >
+                ◀
+              </button>
+
+              <div className="bg-[#1e1005] border-2 border-[#543310] px-3.5 py-1 rounded-xl shadow flex items-center gap-2">
+                <div className="text-right">
+                  <div className="text-white text-sm font-extrabold tracking-wider">
+                    R$ {profile.saldo.toFixed(2)}
+                  </div>
+                  <div className="text-yellow-400 text-[9px] font-bold">
+                    Bônus: R$ {profile.bonus.toFixed(2)}
+                  </div>
+                </div>
+                <span className="text-xl">💵</span>
+              </div>
+            </div>
+
+            {/* Mode Tabs: Maratona 5x | Trio Clash | X1 */}
+            <div className="flex items-center justify-center gap-4 mt-3 border-b-2 border-white/20 pb-2">
+              <button
+                onClick={() => setSelectedMode('maratona')}
+                className={`text-lg uppercase tracking-wide transition-all ${selectedMode === 'maratona' ? 'text-white border-b-4 border-yellow-400 font-black' : 'text-white/60 font-bold'}`}
               >
                 Maratona 5x
               </button>
               <button
-                onClick={() => setSelectedTab('trio')}
-                className={`flex-1 py-1.5 rounded-xl font-lilita text-sm uppercase transition-all ${
-                  selectedTab === 'trio'
-                    ? 'bg-[#FEDF19] text-black border-2 border-black shadow-md'
-                    : 'text-white/70 hover:text-white'
-                }`}
+                onClick={() => setSelectedMode('trio')}
+                className={`text-lg uppercase tracking-wide transition-all ${selectedMode === 'trio' ? 'text-white border-b-4 border-yellow-400 font-black' : 'text-white/60 font-bold'}`}
               >
                 Trio Clash
               </button>
               <button
-                onClick={() => setSelectedTab('x1')}
-                className={`flex-1 py-1.5 rounded-xl font-lilita text-sm uppercase transition-all ${
-                  selectedTab === 'x1'
-                    ? 'bg-[#FEDF19] text-black border-2 border-black shadow-md'
-                    : 'text-white/70 hover:text-white'
-                }`}
+                onClick={() => setSelectedMode('x1')}
+                className={`text-lg uppercase tracking-wide transition-all ${selectedMode === 'x1' ? 'text-white border-b-4 border-yellow-400 font-black' : 'text-white/60 font-bold'}`}
               >
                 X1
               </button>
             </div>
 
-            {/* Banner of Runners */}
-            <div className="relative rounded-2xl overflow-hidden border-2 border-white/20 bg-gradient-to-r from-blue-900 to-indigo-900 p-3 flex flex-col items-center">
-              <div className="font-lilita text-white text-xs uppercase tracking-widest mb-1.5">
-                {selectedTab === 'maratona' ? 'MARATONA 5 (5 JOGADORES)' : selectedTab === 'trio' ? 'TRIO CLASH (3 JOGADORES)' : 'DUELO X1 (1 VS 1)'}
-              </div>
-              <div className="flex items-center justify-center gap-1.5">
-                <img src="/images/character_1_25.webp" className="w-12 h-12 object-contain" />
-                <span className="font-lilita text-[#FEDF19] text-xs">VS</span>
-                <img src="/images/character_2_26.webp" className="w-12 h-12 object-contain" />
-                {selectedTab !== 'x1' && (
+            {/* Mode Banner Artwork (game-02) */}
+            <div className="relative my-2 rounded-2xl overflow-hidden border-2 border-blue-500/50 shadow-2xl bg-gradient-to-r from-blue-900 via-indigo-900 to-purple-900 p-3">
+              <h3 className="text-center text-yellow-300 text-lg uppercase tracking-widest stroke-black-2 mb-2">
+                {selectedMode === 'maratona' ? 'MARATONA 5' : selectedMode === 'trio' ? 'TRIO CLASH' : 'DUELO X1'}
+              </h3>
+
+              <div className="flex items-center justify-around py-2">
+                <img src="/images/character_1_25.webp" alt="" className="w-12 h-12 object-contain" />
+                <span className="text-xs font-black text-white italic">VS</span>
+                <img src="/images/character_2_26.webp" alt="" className="w-12 h-12 object-contain" />
+                {selectedMode !== 'x1' && (
                   <>
-                    <span className="font-lilita text-[#FEDF19] text-xs">VS</span>
-                    <img src="/images/character_3_27.webp" className="w-12 h-12 object-contain" />
+                    <span className="text-xs font-black text-white italic">VS</span>
+                    <img src="/images/character_3_27.webp" alt="" className="w-12 h-12 object-contain" />
                   </>
                 )}
-                {selectedTab === 'maratona' && (
+                {selectedMode === 'maratona' && (
                   <>
-                    <span className="font-lilita text-[#FEDF19] text-xs">VS</span>
-                    <img src="/images/character_4_28.webp" className="w-12 h-12 object-contain" />
+                    <span className="text-xs font-black text-white italic">VS</span>
+                    <img src="/images/character_4_28.webp" alt="" className="w-12 h-12 object-contain" />
                   </>
                 )}
               </div>
             </div>
 
-            {/* Mode description text */}
-            <div className="bg-black/30 border border-white/10 rounded-xl p-3 text-center text-xs text-white/90 font-montserrat">
-              {selectedTab === 'maratona' && (
-                <p>Nesta modalidade são 5 corredores competindo em uma mesma pista e os <strong>3 primeiros colocados</strong> serão premiados (1º = 3.5x | 2º = 1.5x | 3º = 1.0x).</p>
-              )}
-              {selectedTab === 'trio' && (
-                <p>Nesta modalidade são 3 competidores em alta velocidade e <strong>apenas o 1º colocado</strong> leva o prêmio da corrida (2.5x).</p>
-              )}
-              {selectedTab === 'x1' && (
-                <p>Aqui é para quem se garante! Duelo direto entre você e outro piloto. <strong>O campeão leva tudo!</strong> (1.8x).</p>
-              )}
+            {/* Mode Description Box */}
+            <div className="bg-blue-900/60 border-2 border-blue-500 rounded-2xl p-4 shadow-lg text-center">
+              <h4 className="text-yellow-400 text-lg uppercase font-black stroke-black-2 mb-1">
+                {selectedMode === 'maratona' ? '5 competidores' : selectedMode === 'trio' ? '3 competidores' : '1 contra 1'}
+              </h4>
+              <p className="text-white text-xs leading-relaxed font-sans font-medium">
+                {selectedMode === 'maratona'
+                  ? 'Nesta modalidade são 5 pessoas competindo em uma mesma corrida e os 3 primeiros colocados serão premiados.'
+                  : selectedMode === 'trio'
+                  ? 'Disputa acirrada entre 3 corredores. Os 2 primeiros colocados levam a premiação.'
+                  : 'Duelo mano a mano direto na pista. O vencedor leva todo o prêmio acumulado da sala.'}
+              </p>
             </div>
 
-            {/* Bet values selection */}
-            <div>
-              <label className="block text-[11px] font-bold text-white/80 uppercase mb-1.5 text-center">
-                Selecione o valor da entrada:
+            {/* Entry Fee Options */}
+            <div className="my-2">
+              <label className="block text-xs uppercase text-slate-300 font-extrabold mb-1">
+                Escolha o valor da aposta:
               </label>
-              <div className="grid grid-cols-5 gap-2">
-                {['1', '2', '5', '10', '20'].map((val) => (
+              <div className="grid grid-cols-5 gap-1.5">
+                {[1, 2, 5, 10, 25].map(val => (
                   <button
                     key={val}
-                    onClick={() => setBetAmount(val)}
-                    className={`py-2 rounded-xl font-lilita text-xs uppercase border-2 transition-all ${
-                      betAmount === val
-                        ? 'bg-[#FEDF19] text-black border-black scale-105 shadow-md'
-                        : 'bg-black/40 text-white border-white/20 hover:border-white/50'
-                    }`}
+                    onClick={() => setSelectedFee(val)}
+                    className={`py-2 rounded-xl font-black text-sm uppercase transition-all border-2 ${selectedFee === val ? 'bg-yellow-400 text-black border-black shadow-[0_3px_0_#000]' : 'bg-slate-800 text-white border-slate-600 hover:bg-slate-700'}`}
                   >
                     R$ {val}
                   </button>
                 ))}
               </div>
-              <input
-                type="number"
-                value={betAmount}
-                onChange={(e) => setBetAmount(e.target.value)}
-                className="w-full mt-2.5 px-3 py-2 bg-black/50 border border-white/20 rounded-xl text-center text-white font-lilita text-lg focus:outline-none focus:border-[#FEDF19]"
-                placeholder="Outro valor..."
-              />
             </div>
 
-            {/* ENTRAR button */}
-            <button
-              onClick={handleStartRace}
-              disabled={startingRace}
-              className="w-full h-14 bg-[#25D366] hover:bg-[#20ba5a] text-black font-lilita text-2xl uppercase tracking-wider rounded-2xl border-4 border-black flex items-center justify-center gap-2 shadow-[0_6px_0_#128c3e] active:translate-y-1 active:shadow-none transition-all disabled:opacity-50"
-            >
-              {startingRace ? 'ENTRANDO NA ARENA...' : 'ENTRAR NA CORRIDA ⚡'}
-            </button>
-          </div>
-        </div>
-      )}
+            {/* Subscription Box & Green ENTRAR Button */}
+            <div className="bg-[#0e245c] border-2 border-blue-500 rounded-2xl p-4 flex items-center justify-between shadow-xl">
+              <div>
+                <span className="text-[11px] text-slate-300 uppercase block font-bold">Inscrição</span>
+                <span className="text-2xl text-white font-black stroke-black-2">
+                  R$ {selectedFee.toFixed(2)}
+                </span>
+              </div>
 
-      {/* -------------------------------------------------------------------- */}
-      {/* 3. JOGAR COM AMIGOS MODAL (game-05_webp_75.webp) */}
-      {/* -------------------------------------------------------------------- */}
-      {showPartyModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="relative w-full max-w-sm bg-[#092B5A] border-4 border-black rounded-3xl p-5 shadow-2xl flex flex-col gap-4">
-            <button
-              onClick={() => setShowPartyModal(false)}
-              className="absolute -top-3 -right-3 w-10 h-10 bg-red-600 border-2 border-black rounded-full text-white font-lilita text-lg flex items-center justify-center shadow-lg"
-            >
-              ✕
-            </button>
-            <h2 className="font-lilita text-xl text-white uppercase text-center">Jogar com amigos</h2>
-
-            <div className="bg-[#0D3875] border-2 border-black rounded-2xl p-4 text-center">
-              <h3 className="font-lilita text-white text-base uppercase mb-1">Criar partida</h3>
-              <p className="text-xs text-white/70 mb-3">Personalize uma corrida e convide seus amigos!</p>
               <button
-                onClick={() => {
-                  setShowPartyModal(false);
-                  setShowModeModal(true);
-                }}
-                className="w-full py-2.5 bg-[#25D366] text-black font-lilita text-base uppercase rounded-xl border-2 border-black shadow"
+                onClick={() => startRace(selectedFee)}
+                className="px-8 py-3 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 text-white rounded-xl border-3 border-black shadow-[0_4px_0_#000] active:translate-y-1 active:shadow-none text-xl tracking-wider uppercase stroke-black-3"
               >
-                Criar
-              </button>
-            </div>
-
-            <div className="bg-[#0D3875] border-2 border-black rounded-2xl p-4 text-center">
-              <h3 className="font-lilita text-white text-base uppercase mb-1">Participar de uma partida</h3>
-              <p className="text-xs text-white/70 mb-3">Insira o código da corrida:</p>
-              <input
-                type="text"
-                placeholder="CÓDIGO (ex: ARENA77)"
-                className="w-full mb-3 px-3 py-2 bg-black/40 border border-white/20 rounded-xl text-center text-white font-lilita uppercase tracking-widest text-sm focus:outline-none"
-              />
-              <button
-                onClick={() => alert('Buscando sala... Sala não encontrada no momento.')}
-                className="w-full py-2.5 bg-[#FEDF19] text-black font-lilita text-base uppercase rounded-xl border-2 border-black shadow"
-              >
-                Participar
+                ENTRAR
               </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* -------------------------------------------------------------------- */}
-      {/* 4. CANVAS IN-GAME RACE (Pixel Perfect to game-14, 16, 19, 21) */}
-      {/* -------------------------------------------------------------------- */}
-      {gameState === 'playing' && (
-        <div className="relative w-full h-screen overflow-hidden bg-black">
-          {/* Main 60 FPS 3D Perspective Canvas */}
-          <canvas ref={canvasRef} className="absolute inset-0 block w-full h-full" />
-
-          {/* TOP HUD: Position (Left) & Gems (Right) */}
-          <div className="absolute top-3 inset-x-3 flex items-center justify-between pointer-events-none z-30">
-            {/* Position: 1º / 2º / 3º */}
-            <div className="flex items-center gap-1">
-              <span className="font-lilita text-5xl text-white stroke-black-4 tracking-tighter drop-shadow-[0_4px_12px_rgba(0,0,0,0.9)]">
-                {currentRank}º
-              </span>
-            </div>
-
-            {/* Collected Gems HUD (game-14) */}
-            <div className="flex items-center gap-3 bg-black/60 px-3 py-1.5 rounded-full border border-white/20 backdrop-blur-md shadow-xl">
-              {/* Diamante */}
-              <div className="flex items-center gap-1">
-                <span className="text-lg">💎</span>
-                <span className="font-lilita text-sm text-[#38BDF8]">{raceGems.diamante}</span>
-              </div>
-              {/* Rubi */}
-              <div className="flex items-center gap-1">
-                <span className="text-lg">🔴</span>
-                <span className="font-lilita text-sm text-[#EF4444]">{raceGems.rubi}</span>
-              </div>
-              {/* Ouro */}
-              <div className="flex items-center gap-1">
-                <span className="text-lg">🟡</span>
-                <span className="font-lilita text-sm text-[#FEDF19]">{raceGems.ouro}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* LEFT HUD: Vertical Track Progress Bar (game-14, 16, 19) */}
-          <div className="absolute left-3 top-20 bottom-24 w-6 pointer-events-none z-30 flex flex-col items-center">
-            {/* Finish Line Flag Icon Top */}
-            <div className="text-sm mb-1">🏁</div>
-
-            {/* Progress Track Line */}
-            <div className="relative w-1.5 flex-1 bg-white/40 rounded-full overflow-hidden">
-              <div
-                className="absolute bottom-0 inset-x-0 bg-[#22C55E] transition-all duration-100 rounded-full"
-                style={{ height: `${playerRaceProgress}%` }}
-              />
-            </div>
-
-            {/* Moving Player Circle Avatar on the bar */}
-            <div
-              className="absolute left-1/2 -translate-x-1/2 w-6 h-6 rounded-full border-2 border-white bg-blue-600 flex items-center justify-center font-lilita text-[10px] text-white shadow-lg transition-all duration-75"
-              style={{ bottom: `calc(${playerRaceProgress}% * 0.85)` }}
-            >
-              {user?.nome ? user.nome.charAt(0).toUpperCase() : 'U'}
-            </div>
-          </div>
-
-          {/* START COUNTDOWN OVERLAY (3, 2, 1, VAI!) */}
-          {countdownText && (
-            <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none animate-ping duration-500">
-              <span className="font-lilita text-7xl sm:text-9xl text-[#FEDF19] stroke-black-4 drop-shadow-[0_10px_30px_rgba(0,0,0,0.9)]">
-                {countdownText}
-              </span>
-            </div>
-          )}
-
-          {/* BOTTOM CONTROLS: 3 Cyan Reticles for 3 Lanes (game-14, 16, 19) */}
-          <div className="absolute bottom-6 inset-x-0 flex justify-center items-center gap-8 z-30">
-            {[0, 1, 2].map((laneIdx) => (
+        {/* ============================================================== */}
+        {/* 3. CUSTOMIZATION SCREEN (Equipamentos game-10_webp_80.webp)   */}
+        {/* ============================================================== */}
+        {activeScreen === 'customization' && (
+          <div className="relative w-full h-full flex flex-col justify-between p-4 bg-[#0A1640]">
+            <div className="flex items-center gap-3 pt-2">
               <button
-                key={laneIdx}
-                onClick={() => {
-                  setActiveLaneIndex(laneIdx);
-                  const evt = new KeyboardEvent('keydown', {
-                    key: laneIdx === 0 ? 'ArrowLeft' : laneIdx === 2 ? 'ArrowRight' : 'ArrowLeft',
-                  });
-                  window.dispatchEvent(evt);
-                }}
-                className={`relative w-16 h-16 rounded-full border-2 transition-all flex items-center justify-center active:scale-90 ${
-                  activeLaneIndex === laneIdx
-                    ? 'border-[#00F0FF] bg-[#00F0FF]/20 shadow-[0_0_20px_#00F0FF]'
-                    : 'border-cyan-400/40 bg-black/40 hover:border-cyan-400/80'
-                }`}
+                onClick={() => setActiveScreen('lobby')}
+                className="w-10 h-10 rounded-xl bg-slate-700/80 border-2 border-slate-500 text-white flex items-center justify-center text-lg active:scale-95 shadow"
               >
-                {/* Concentric rings */}
-                <div className="w-10 h-10 rounded-full border border-cyan-400/60 flex items-center justify-center">
-                  <div className="w-4 h-4 rounded-full bg-cyan-400/80" />
-                </div>
+                ◀
               </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* -------------------------------------------------------------------- */}
-      {/* 5. VICTORY / RESULT MODAL (Matching game-17_webp_87.webp) */}
-      {/* -------------------------------------------------------------------- */}
-      {gameState === 'gameover' && raceResult && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-cover bg-center"
-          style={{ backgroundImage: "url('/images/bg_103.jpg')" }}
-        >
-          {/* Cosmic backdrop with confetti */}
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-md" />
-
-          {/* Dialog Card */}
-          <div className="relative z-10 w-full max-w-sm bg-[#0E3D75] border-4 border-black rounded-3xl p-6 shadow-[0_20px_60px_rgba(0,0,0,0.9)] flex flex-col items-center animate-scaleUp">
-            {/* Top User Avatar in Circle */}
-            <div className="-mt-14 w-20 h-20 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-800 border-4 border-black flex items-center justify-center font-lilita text-3xl text-white shadow-2xl">
-              {user?.nome ? user.nome.charAt(0).toUpperCase() : 'U'}
-            </div>
-
-            {/* Orange Banner with Player Name */}
-            <div className="w-full -mt-2 bg-gradient-to-r from-[#F97316] via-[#FB923C] to-[#F97316] border-2 border-black rounded-xl py-1 text-center font-lilita text-white text-base tracking-wider shadow-md uppercase">
-              {user?.nome || 'Diego'}
-            </div>
-
-            {/* Medal Trophy */}
-            <div className="my-4 flex flex-col items-center">
-              <span className="text-6xl drop-shadow-[0_8px_16px_rgba(0,0,0,0.6)] animate-bounce">
-                {raceResult.posicao === 1 ? '🥇' : raceResult.posicao === 2 ? '🥈' : raceResult.posicao === 3 ? '🥉' : '🏁'}
-              </span>
-              <h2 className="font-lilita text-3xl text-white stroke-black-2 uppercase tracking-wider mt-2">
-                {raceResult.posicao}º LUGAR
+              <h2 className="text-2xl text-white stroke-black-3 uppercase tracking-wider">
+                Equipamentos
               </h2>
-              <p className="text-sm font-montserrat text-emerald-300 font-bold tracking-wide">
-                {raceResult.posicao <= 3 ? 'PARABÉNS! VOCÊ VENCEU!' : 'TENTE NOVAMENTE!'}
-              </p>
             </div>
 
-            {/* Reward Summary */}
-            <div className="w-full bg-black/40 border border-white/20 rounded-2xl p-3 mb-5 space-y-2">
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-white/70 font-semibold">Prêmio Conquistado:</span>
-                <span className="font-lilita text-lg text-emerald-400">
-                  R$ {(raceResult.valor_premio ?? 0).toFixed(2).replace('.', ',')}
-                </span>
+            {/* 3D Preview of Selected Robot */}
+            <div className="flex-1 flex flex-col items-center justify-center my-2">
+              <img
+                src={`/images/character_${selectedCharId}_${24 + selectedCharId}.webp`}
+                alt="Robot"
+                className="w-40 h-40 object-contain drop-shadow-[0_12px_20px_rgba(0,0,0,0.8)]"
+              />
+            </div>
+
+            {/* Customization Tabs: Accessories | Colors | Faces | Icons */}
+            <div className="flex items-center justify-around border-b-2 border-white/20 pb-2 mb-3">
+              <button
+                onClick={() => setCustomTab('accessories')}
+                className={`text-sm uppercase tracking-wide ${customTab === 'accessories' ? 'text-white border-b-2 border-yellow-400 font-black' : 'text-white/60 font-bold'}`}
+              >
+                Accessories
+              </button>
+              <button
+                onClick={() => setCustomTab('colors')}
+                className={`text-sm uppercase tracking-wide ${customTab === 'colors' ? 'text-white border-b-2 border-yellow-400 font-black' : 'text-white/60 font-bold'}`}
+              >
+                Colors
+              </button>
+              <button
+                onClick={() => setCustomTab('faces')}
+                className={`text-sm uppercase tracking-wide ${customTab === 'faces' ? 'text-white border-b-2 border-yellow-400 font-black' : 'text-white/60 font-bold'}`}
+              >
+                Faces
+              </button>
+              <button
+                onClick={() => setCustomTab('icons')}
+                className={`text-sm uppercase tracking-wide ${customTab === 'icons' ? 'text-white border-b-2 border-yellow-400 font-black' : 'text-white/60 font-bold'}`}
+              >
+                Icons
+              </button>
+            </div>
+
+            {/* Color Grid (Exact colors from game-10) */}
+            <div className="grid grid-cols-4 gap-2.5 pb-4">
+              {[
+                { hex: '#ffffff', charId: 1, name: 'Branco' },
+                { hex: '#2196f3', charId: 2, name: 'Azul' },
+                { hex: '#00e5ff', charId: 1, name: 'Ciano' },
+                { hex: '#9e9e9e', charId: 3, name: 'Cinza' },
+                { hex: '#795548', charId: 4, name: 'Marrom' },
+                { hex: '#212121', charId: 2, name: 'Preto' },
+                { hex: '#e91e63', charId: 3, name: 'Rosa' },
+                { hex: '#4caf50', charId: 1, name: 'Verde' },
+                { hex: '#f44336', charId: 4, name: 'Vermelho' }
+              ].map((c, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    setSelectedColor(c.hex);
+                    setSelectedCharId(c.charId);
+                    setProfile(prev => ({ ...prev, avatar: `/images/character_${c.charId}_${24 + c.charId}.webp` }));
+                  }}
+                  className={`relative p-2 rounded-2xl bg-blue-900/80 border-3 flex flex-col items-center justify-center transition-all ${selectedColor === c.hex ? 'border-amber-400 ring-2 ring-amber-400 shadow-lg scale-105' : 'border-blue-700 hover:border-blue-500'}`}
+                >
+                  <img
+                    src={`/images/character_${c.charId}_${24 + c.charId}.webp`}
+                    alt=""
+                    className="w-12 h-12 object-contain"
+                  />
+                  <div
+                    className="w-3 h-3 rounded-full mt-1 border border-white"
+                    style={{ backgroundColor: c.hex }}
+                  />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================== */}
+        {/* 4. JOGAR COM AMIGOS SCREEN (game-05_webp_75.webp)              */}
+        {/* ============================================================== */}
+        {activeScreen === 'friends' && (
+          <div className="relative w-full h-full flex flex-col justify-between p-4 bg-[#0A1640]">
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                onClick={() => setActiveScreen('lobby')}
+                className="w-10 h-10 rounded-xl bg-slate-700/80 border-2 border-slate-500 text-white flex items-center justify-center text-lg active:scale-95 shadow"
+              >
+                ◀
+              </button>
+              <h2 className="text-2xl text-white stroke-black-3 uppercase tracking-wider">
+                Jogar com amigos
+              </h2>
+            </div>
+
+            <div className="flex-1 flex flex-col justify-center gap-5 my-4">
+              {/* Criar Partida Card */}
+              <div className="bg-[#0e245c] border-3 border-blue-500 rounded-3xl p-5 shadow-2xl text-center flex flex-col items-center">
+                <h3 className="text-xl text-white stroke-black-2 uppercase mb-2">
+                  Criar partida
+                </h3>
+                <p className="text-xs text-white/80 font-sans mb-4">
+                  Personalize uma corrida e convide seus amigos!
+                </p>
+                {roomCode ? (
+                  <div className="w-full mb-3">
+                    <span className="text-xs text-yellow-300 block uppercase font-bold">Código da sala:</span>
+                    <span className="text-2xl tracking-widest text-emerald-400 font-mono font-black">{roomCode}</span>
+                  </div>
+                ) : null}
+                <button
+                  onClick={() => {
+                    const code = 'ARENA-' + Math.floor(1000 + Math.random() * 9000);
+                    setRoomCode(code);
+                  }}
+                  className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white rounded-2xl border-3 border-black shadow-[0_4px_0_#000] active:translate-y-1 active:shadow-none text-lg uppercase tracking-wider stroke-black-2"
+                >
+                  {roomCode ? 'Sala Criada!' : 'Criar'}
+                </button>
               </div>
-              <div className="flex justify-between items-center text-xs">
-                <span className="text-white/70">Coletáveis da Pista:</span>
-                <div className="flex gap-2 font-lilita">
-                  <span className="text-[#FEDF19]">🟡 +{raceGems.ouro}</span>
-                  <span className="text-[#EF4444]">🔴 +{raceGems.rubi}</span>
-                  <span className="text-[#38BDF8]">💎 +{raceGems.diamante}</span>
+
+              {/* Participar de uma partida Card */}
+              <div className="bg-[#0e245c] border-3 border-blue-500 rounded-3xl p-5 shadow-2xl text-center flex flex-col items-center">
+                <h3 className="text-xl text-white stroke-black-2 uppercase mb-2">
+                  Participar de uma partida
+                </h3>
+                <p className="text-xs text-white/80 font-sans mb-3">
+                  Insira o código da partida
+                </p>
+                <input
+                  type="text"
+                  placeholder="EX: ARENA-5829"
+                  value={inputCode}
+                  onChange={e => setInputCode(e.target.value.toUpperCase())}
+                  className="w-full bg-[#08153b] border-2 border-blue-400 rounded-xl px-4 py-2.5 text-center text-white font-mono font-bold uppercase tracking-wider mb-4 outline-none focus:border-yellow-400"
+                />
+                <button
+                  onClick={() => {
+                    if (!inputCode) {
+                      alert('Digite um código de partida!');
+                      return;
+                    }
+                    startRace(5.0);
+                  }}
+                  className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white rounded-2xl border-3 border-black shadow-[0_4px_0_#000] active:translate-y-1 active:shadow-none text-lg uppercase tracking-wider stroke-black-2"
+                >
+                  Participar
+                </button>
+              </div>
+            </div>
+
+            <div />
+          </div>
+        )}
+
+        {/* ============================================================== */}
+        {/* 5. ACTIVE 3D RACE RUNNER (game-14, 15, 18, 19, 24)            */}
+        {/* ============================================================== */}
+        {activeScreen === 'playing' && (
+          <div className="relative w-full h-full">
+            {/* 3D WebGL Canvas Viewport */}
+            <div ref={mountRef} className="absolute inset-0 w-full h-full z-0 cursor-pointer" />
+
+            {/* TOP HUD (Position, Gems, Diamonds, Coins from game-14 & game-24) */}
+            <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-30 pointer-events-none">
+              {/* Position: 1º / 2º / 3º */}
+              <div className="text-4xl text-white stroke-black-4 font-black drop-shadow-lg">
+                {currentRank}º
+              </div>
+
+              {/* Collectibles Pill (💎 Blue Diamond, 🔴 Red Ruby, 🪙 Gold Coin) */}
+              <div className="flex items-center gap-3 bg-black/50 backdrop-blur-md border border-white/20 px-3 py-1 rounded-full shadow-lg">
+                <div className="flex items-center gap-1">
+                  <span className="text-base">💎</span>
+                  <span className="text-cyan-400 font-extrabold text-sm">{gemsCollected.diamante}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-base">🔴</span>
+                  <span className="text-red-400 font-extrabold text-sm">{gemsCollected.rubi}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-base">🪙</span>
+                  <span className="text-yellow-400 font-extrabold text-sm">{gemsCollected.ouro}</span>
                 </div>
               </div>
-              <div className="flex justify-between items-center text-xs">
-                <span className="text-white/70">Novo Saldo Total:</span>
-                <span className="font-lilita text-white">
-                  R$ {((user?.saldo ?? 0) + (raceResult.valor_premio ?? 0)).toFixed(2).replace('.', ',')}
-                </span>
+            </div>
+
+            {/* LEFT PROGRESS TRACK (Vertical progress line from game-14/18/24) */}
+            <div className="absolute left-3 top-20 bottom-28 w-6 z-30 pointer-events-none flex flex-col items-center">
+              <div className="relative w-1.5 h-full bg-white/40 rounded-full overflow-hidden">
+                <div
+                  className="absolute bottom-0 w-full bg-emerald-500 rounded-full transition-all duration-100"
+                  style={{ height: `${raceProgress}%` }}
+                />
+              </div>
+
+              {/* Player Avatar Pin moving upwards */}
+              <div
+                className="absolute w-8 h-8 rounded-full border-2 border-white shadow-lg overflow-hidden bg-blue-600 transition-all duration-100 -ml-1"
+                style={{ bottom: `calc(${raceProgress}% - 16px)` }}
+              >
+                <img src={profile.avatar} alt="" className="w-full h-full object-cover" />
               </div>
             </div>
 
-            {/* Green CONTINUAR Button */}
-            <button
-              onClick={() => {
-                setGameState('lobby');
-                // Refresh balance
-                fetch('/api/auth/me')
-                  .then((r) => r.json())
-                  .then((d) => setUser(d.user));
-              }}
-              className="w-full h-14 bg-[#25D366] hover:bg-[#20ba5a] text-black font-lilita text-2xl uppercase tracking-wider rounded-2xl border-4 border-black flex items-center justify-center gap-2 shadow-[0_6px_0_#128c3e] active:translate-y-1 active:shadow-none transition-all"
-            >
-              CONTINUAR
-            </button>
+            {/* COUNTDOWN OVERLAY (3, 2, 1, VAI! from game-18) */}
+            {countdown !== null && (
+              <div className="absolute inset-0 flex items-center justify-center z-40 bg-black/30 backdrop-blur-xs pointer-events-none">
+                <span className="text-8xl text-yellow-400 font-black stroke-black-6 animate-ping-once drop-shadow-2xl">
+                  {countdown}
+                </span>
+              </div>
+            )}
+
+            {/* BOTTOM CONTROLS: 3 CYAN RETICLE TARGET RINGS (game-14, 18, 19, 24) */}
+            <div className="absolute bottom-6 left-0 right-0 flex items-center justify-around px-4 z-30">
+              {/* Left Ring */}
+              <button
+                onClick={() => setLaneExplicit(-1)}
+                className="w-16 h-16 rounded-full border-3 border-cyan-400/80 bg-cyan-500/10 flex items-center justify-center shadow-[0_0_15px_rgba(0,240,255,0.4)] active:scale-90 transition-transform"
+              >
+                <div className="w-8 h-8 rounded-full border-2 border-cyan-300 flex items-center justify-center">
+                  <div className="w-2 h-2 rounded-full bg-cyan-400" />
+                </div>
+              </button>
+
+              {/* Center Ring (or Jump) */}
+              <button
+                onClick={() => {
+                  setLaneExplicit(0);
+                  jump();
+                }}
+                className="w-16 h-16 rounded-full border-3 border-cyan-400/80 bg-cyan-500/10 flex items-center justify-center shadow-[0_0_15px_rgba(0,240,255,0.4)] active:scale-90 transition-transform"
+              >
+                {activePowerup === 'rocket' ? (
+                  <span className="text-2xl animate-pulse">🚀</span>
+                ) : (
+                  <div className="w-8 h-8 rounded-full border-2 border-cyan-300 flex items-center justify-center">
+                    <div className="w-2 h-2 rounded-full bg-cyan-400" />
+                  </div>
+                )}
+              </button>
+
+              {/* Right Ring */}
+              <button
+                onClick={() => setLaneExplicit(1)}
+                className="w-16 h-16 rounded-full border-3 border-cyan-400/80 bg-cyan-500/10 flex items-center justify-center shadow-[0_0_15px_rgba(0,240,255,0.4)] active:scale-90 transition-transform"
+              >
+                <div className="w-8 h-8 rounded-full border-2 border-cyan-300 flex items-center justify-center">
+                  <div className="w-2 h-2 rounded-full bg-cyan-400" />
+                </div>
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* ============================================================== */}
+        {/* 6. VICTORY SCREEN MODAL (Exact match of game-17_webp_87.webp) */}
+        {/* ============================================================== */}
+        {activeScreen === 'victory' && (
+          <div className="relative w-full h-full flex flex-col items-center justify-center p-6 bg-black/80 backdrop-blur-md z-50">
+            {/* Victory Blue Box Container */}
+            <div className="relative w-full max-w-[340px] bg-[#0c3e7a] border-4 border-black rounded-3xl p-6 shadow-2xl flex flex-col items-center">
+              {/* Circular Avatar Badge on Top */}
+              <div className="absolute -top-12 w-24 h-24 rounded-full border-4 border-black overflow-hidden bg-blue-500 shadow-2xl">
+                <img src={profile.avatar} alt="" className="w-full h-full object-cover" />
+              </div>
+
+              {/* Orange Banner with Player Name */}
+              <div className="w-[110%] -mx-4 mt-8 py-2 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-500 border-y-3 border-black text-center shadow-lg transform -rotate-1">
+                <h3 className="text-white text-xl font-extrabold uppercase stroke-black-2 tracking-wider">
+                  {profile.name}
+                </h3>
+              </div>
+
+              {/* Medal & Rank */}
+              <div className="flex flex-col items-center my-6">
+                <div className="text-6xl mb-2 animate-bounce-gentle">
+                  {currentRank === 1 ? '🥇' : currentRank === 2 ? '🥈' : '🥉'}
+                </div>
+                <h4 className="text-3xl text-white font-black stroke-black-3 uppercase tracking-wider">
+                  {currentRank}º LUGAR
+                </h4>
+                <span className="text-emerald-300 font-extrabold text-sm uppercase tracking-widest mt-1">
+                  {currentRank === 1 ? 'PARABÉNS! VOCÊ VENCEU!' : 'BOM DESEMPENHO!'}
+                </span>
+              </div>
+
+              {/* Prize Winnings Display */}
+              <div className="bg-blue-950/80 border-2 border-blue-400 rounded-2xl w-full py-3 px-4 text-center mb-6 shadow-inner">
+                <span className="text-slate-300 text-xs uppercase block font-bold">Premiação Recebida</span>
+                <span className="text-3xl text-yellow-400 font-black stroke-black-2">
+                  + R$ {winnings.toFixed(2)}
+                </span>
+                <div className="flex justify-center gap-4 mt-2 text-xs text-white">
+                  <span>🪙 +{gemsCollected.ouro} Ouro</span>
+                  <span>💎 +{gemsCollected.diamante} Diamante</span>
+                </div>
+              </div>
+
+              {/* Green Continuar Button */}
+              <button
+                onClick={() => setActiveScreen('lobby')}
+                className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 text-white rounded-2xl border-3 border-black shadow-[0_5px_0_#000] active:translate-y-1 active:shadow-none text-xl uppercase tracking-wider stroke-black-2"
+              >
+                Continuar
+              </button>
+            </div>
+          </div>
+        )}
+
+      </div>
     </div>
   );
 }
