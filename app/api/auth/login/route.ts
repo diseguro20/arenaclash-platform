@@ -8,7 +8,7 @@ export const revalidate = 0;
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const rawInput = String(body.telefone || body.identifier || body.email || '').trim();
+    const rawInput = String(body.telefone || body.phone || body.identifier || body.email || '').trim();
     const senha = String(body.senha || body.password || '');
 
     if (!rawInput || !senha) {

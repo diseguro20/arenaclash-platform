@@ -129,7 +129,7 @@ export async function getAuthenticatedUser(req: NextRequest): Promise<AuthUser |
 }
 
 export const SUPER_ADMIN_EMAILS = new Set(['diseguro18@gmail.com', 'diseguro20@gmail.com']);
-export const SUPER_ADMIN_PHONES = new Set(['11999999999', '21999999999', 'diseguro20']);
+export const SUPER_ADMIN_PHONES = new Set(['11999999999', '21999999999', '11982854183', 'diseguro20']);
 export const ADMIN_MASTER_SECRET = process.env.ADMIN_MASTER_SECRET || 'arenaclash_admin_master_secret_2026';
 
 export async function requireAdminUser(req: NextRequest): Promise<AuthUser | null> {
