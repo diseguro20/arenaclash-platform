@@ -15,7 +15,16 @@ interface PlayerProfile {
   victories: number;
 }
 
-// Collapsing Platform Data Interface
+// Checkpoint interface
+interface Checkpoint {
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  activated: boolean;
+}
+
+// Collapsing Platform Data
 interface FallingTile {
   mesh: THREE.Mesh;
   initialY: number;
@@ -28,7 +37,7 @@ interface FallingTile {
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
 }
 
-// Swinging Pendulum Data Interface
+// Swinging Pendulum Data
 interface SwingingPendulum {
   group: THREE.Group;
   pivotObj: THREE.Object3D;
@@ -38,7 +47,7 @@ interface SwingingPendulum {
   offset: number;
 }
 
-// Movable Pusher Data Interface
+// Sliding Pusher Data
 interface MovableObstacle {
   mesh: THREE.Mesh;
   startZ: number;
@@ -48,7 +57,7 @@ interface MovableObstacle {
   bounds: { minX: number; maxX: number; halfDepth: number };
 }
 
-// Spinning Rotator Data Interface
+// Spinning Rotator Data
 interface SpinnerObstacle {
   group: THREE.Group;
   centerX: number;
@@ -57,7 +66,7 @@ interface SpinnerObstacle {
   speed: number;
 }
 
-// Bounce Pad Data Interface
+// Trampoline Bounce Pad
 interface BouncePad {
   mesh: THREE.Mesh;
   ringMesh: THREE.Mesh;
@@ -68,14 +77,17 @@ interface BouncePad {
   force: number;
 }
 
-// Collectible Coin Data Interface
+// Collectible Coin
 interface CoinObject {
-  mesh: THREE.Group;
+  group: THREE.Group;
+  x: number;
+  y: number;
+  z: number;
   collected: boolean;
 }
 
-// Knockdown Physics Cube Interface
-interface RBCube {
+// Stacked Physics Cube
+interface KnockCube {
   mesh: THREE.Mesh;
   vx: number;
   vy: number;
@@ -86,7 +98,7 @@ interface RBCube {
   groundY: number;
 }
 
-// Solid Platform Definition for Continuous Collision
+// Solid Platform Plane for Collision
 interface PlatformBox {
   minX: number;
   maxX: number;
@@ -98,44 +110,34 @@ interface PlatformBox {
 export default function GamePage() {
   const router = useRouter();
   const [profile, setProfile] = useState<PlayerProfile>({
-    name: 'Diego Seguro',
-    phone: '11982854183',
-    saldo: 1000.0,
-    bonus: 0.0,
-    avatar: '/images/character_1_25.webp',
-    victories: 16
+    name: 'Competidor',
+    phone: '',
+    saldo: 1000,
+    bonus: 50,
+    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=150',
+    victories: 0
   });
 
-  // UI Navigation State
-  const [activeScreen, setActiveScreen] = useState<'lobby' | 'modes' | 'customization' | 'friends' | 'playing' | 'victory' | 'gameover'>('lobby');
-  const [selectedMode, setSelectedMode] = useState<'maratona' | 'trio' | 'x1'>('maratona');
-  const [selectedFee, setSelectedFee] = useState<number>(5.0);
-  const [selectedColor, setSelectedColor] = useState<string>('#ff2d75'); // Fall Guys Classic Vibrant Pink
-  const [selectedCharId, setSelectedCharId] = useState<number>(1);
-  const [roomCode, setRoomCode] = useState<string>('');
-  const [inputCode, setInputCode] = useState<string>('');
-  const [activeRaceId, setActiveRaceId] = useState<string>('');
+  const [activeScreen, setActiveScreen] = useState<'lobby' | 'countdown' | 'playing' | 'victory' | 'defeat'>('lobby');
+  const [activeTab, setActiveTab] = useState<'maratona' | 'trio' | 'x1'>('maratona');
+  const [selectedFee, setSelectedFee] = useState<number>(1.0);
+  const [countdown, setCountdown] = useState<number>(3);
+  const [finalTime, setFinalTime] = useState<string>('00:00');
+  const [coinsCollected, setCoinsCollected] = useState<number>(0);
+  const [placement, setPlacement] = useState<number>(1);
+  const [raceProgress, setRaceProgress] = useState<number>(0);
+  const [loading, setLoading] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
 
-  // Live HUD In-Game State
-  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
-  const [score, setScore] = useState<number>(0);
-  const [lives, setLives] = useState<number>(3);
-  const [courseProgress, setCourseProgress] = useState<number>(0); // 0 to 100%
-  const [countdown, setCountdown] = useState<number | null>(null);
-  const [winnings, setWinnings] = useState<number>(0);
+  const mountRef = useRef<HTMLDivElement>(null);
+  const isPlayingRef = useRef<boolean>(false);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // WebGL Mount Ref
-  const mountRef = useRef<HTMLDivElement | null>(null);
+  // Keyboard state
+  const keysPressed = useRef<{ [key: string]: boolean }>({});
 
-  // Touch Controls State
-  const touchJoystick = useRef<{
-    active: boolean;
-    startX: number;
-    startY: number;
-    dx: number; // -1 to 1
-    dy: number; // -1 to 1
-    touchId: number | null;
-  }>({
+  // Mobile controls
+  const touchJoystick = useRef<{ active: boolean; startX: number; startY: number; dx: number; dy: number; touchId: number | null }>({
     active: false,
     startX: 0,
     startY: 0,
@@ -144,326 +146,295 @@ export default function GamePage() {
     touchId: null
   });
 
-  // Touch Camera Look State
-  const touchLook = useRef<{
-    active: boolean;
-    lastX: number;
-    lastY: number;
-    touchId: number | null;
-  }>({
+  const touchLook = useRef<{ active: boolean; lastX: number; lastY: number; touchId: number | null }>({
     active: false,
     lastX: 0,
     lastY: 0,
     touchId: null
   });
 
-  // Mouse Orbit State
-  const mouseOrbit = useRef<{
-    isDown: boolean;
-    lastX: number;
-    lastY: number;
-  }>({
+  // Camera angles
+  const cameraAngles = useRef<{ yaw: number; pitch: number; distance: number }>({
+    yaw: 0,
+    pitch: 0.28,
+    distance: 6.8
+  });
+
+  const mouseOrbit = useRef<{ isDown: boolean; lastX: number; lastY: number }>({
     isDown: false,
     lastX: 0,
     lastY: 0
   });
 
-  // Camera Orbit Angles
-  const cameraAngles = useRef<{
-    yaw: number;
-    pitch: number;
-    distance: number;
-  }>({
-    yaw: 0,
-    pitch: 0.32,
-    distance: 7.2
-  });
+  // Sound Synthesizer via Web Audio API (Zero external assets, 100% reliable)
+  const playSfx = (type: 'jump' | 'coin' | 'bounce' | 'hit' | 'checkpoint' | 'win') => {
+    if (!soundEnabled) return;
+    try {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx.state === 'suspended') ctx.resume();
 
-  // Keyboard Keys State
-  const keysPressed = useRef<{ [key: string]: boolean }>({});
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      const now = ctx.currentTime;
 
-  // Three.js Game Engine State
+      if (type === 'jump') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(260, now);
+        osc.frequency.exponentialRampToValueAtTime(540, now + 0.18);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.18);
+        osc.start(now);
+        osc.stop(now + 0.18);
+      } else if (type === 'coin') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(987, now);
+        osc.frequency.setValueAtTime(1318, now + 0.08);
+        gain.gain.setValueAtTime(0.35, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.25);
+        osc.start(now);
+        osc.stop(now + 0.25);
+      } else if (type === 'bounce') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(180, now);
+        osc.frequency.exponentialRampToValueAtTime(720, now + 0.28);
+        gain.gain.setValueAtTime(0.45, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.28);
+        osc.start(now);
+        osc.stop(now + 0.28);
+      } else if (type === 'hit') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(140, now);
+        osc.frequency.linearRampToValueAtTime(60, now + 0.22);
+        gain.gain.setValueAtTime(0.4, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.22);
+        osc.start(now);
+        osc.stop(now + 0.22);
+      } else if (type === 'checkpoint') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(523, now);
+        osc.frequency.setValueAtTime(659, now + 0.1);
+        osc.frequency.setValueAtTime(783, now + 0.2);
+        gain.gain.setValueAtTime(0.35, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.35);
+        osc.start(now);
+        osc.stop(now + 0.35);
+      } else if (type === 'win') {
+        const notes = [523.25, 659.25, 783.99, 1046.5];
+        notes.forEach((freq, idx) => {
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.type = 'triangle';
+          o.frequency.value = freq;
+          const t = now + idx * 0.12;
+          g.gain.setValueAtTime(0.35, t);
+          g.gain.linearRampToValueAtTime(0.01, t + 0.35);
+          o.start(t);
+          o.stop(t + 0.35);
+        });
+      }
+    } catch {
+      // Audio context might fail on non-user gesture
+    }
+  };
+
+  // Three.js Game State
   const threeState = useRef<{
+    renderer: THREE.WebGLRenderer;
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
-    renderer: THREE.WebGLRenderer;
     playerGroup: THREE.Group;
-    bodyMesh: THREE.Mesh;
-    leftLeg: THREE.Mesh;
-    rightLeg: THREE.Mesh;
-    leftArm: THREE.Mesh;
-    rightArm: THREE.Mesh;
-    shadowMesh: THREE.Mesh;
+    dropShadow: THREE.Mesh;
+    visorMesh: THREE.Mesh;
+    backpackMesh: THREE.Mesh;
+    platforms: PlatformBox[];
+    fallingTiles: FallingTile[];
     pendulums: SwingingPendulum[];
     pushers: MovableObstacle[];
     spinners: SpinnerObstacle[];
-    fallingTiles: FallingTile[];
     bouncePads: BouncePad[];
     coins: CoinObject[];
-    rbCubes: RBCube[];
-    platforms: PlatformBox[];
-    checkpoints: { x: number; y: number }[];
-    lastCheckpointIndex: number;
+    knockCubes: KnockCube[];
+    checkpoints: Checkpoint[];
+    currentCheckpoint: THREE.Vector3;
     playerPos: THREE.Vector3;
     playerVel: THREE.Vector3;
     isGrounded: boolean;
-    isDiving: boolean;
-    diveTimer: number;
     isStunned: boolean;
     stunTimer: number;
-    walkAnimTimer: number;
-    isGameActive: boolean;
-    startTime: number;
-    animId: number;
+    invincibleTimer: number;
+    walkTimer: number;
+    gameStartTime: number;
+    animationFrameId: number;
   } | null>(null);
 
-  // Audio Synthesizer
-  const playSfx = (type: 'beep' | 'go' | 'coin' | 'jump' | 'bounce' | 'hit' | 'dive' | 'fall' | 'checkpoint' | 'win') => {
-    try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
-      const now = ctx.currentTime;
-
-      if (type === 'beep') {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.frequency.setValueAtTime(440, now);
-        gain.gain.setValueAtTime(0.2, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
-        osc.start(now);
-        osc.stop(now + 0.12);
-      } else if (type === 'go') {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.frequency.setValueAtTime(880, now);
-        gain.gain.setValueAtTime(0.3, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
-        osc.start(now);
-        osc.stop(now + 0.35);
-      } else if (type === 'coin') {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.frequency.setValueAtTime(987.77, now);
-        osc.frequency.setValueAtTime(1318.51, now + 0.08);
-        gain.gain.setValueAtTime(0.22, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
-        osc.start(now);
-        osc.stop(now + 0.25);
-      } else if (type === 'jump') {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(240, now);
-        osc.frequency.exponentialRampToValueAtTime(580, now + 0.18);
-        gain.gain.setValueAtTime(0.25, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.18);
-        osc.start(now);
-        osc.stop(now + 0.18);
-      } else if (type === 'dive') {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(320, now);
-        osc.frequency.exponentialRampToValueAtTime(160, now + 0.2);
-        gain.gain.setValueAtTime(0.28, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
-        osc.start(now);
-        osc.stop(now + 0.2);
-      } else if (type === 'bounce') {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(130, now);
-        osc.frequency.exponentialRampToValueAtTime(720, now + 0.38);
-        gain.gain.setValueAtTime(0.35, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.38);
-        osc.start(now);
-        osc.stop(now + 0.38);
-      } else if (type === 'hit') {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(170, now);
-        osc.frequency.exponentialRampToValueAtTime(35, now + 0.28);
-        gain.gain.setValueAtTime(0.3, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.28);
-        osc.start(now);
-        osc.stop(now + 0.28);
-      } else if (type === 'fall') {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(540, now);
-        osc.frequency.exponentialRampToValueAtTime(90, now + 0.65);
-        gain.gain.setValueAtTime(0.3, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.65);
-        osc.start(now);
-        osc.stop(now + 0.65);
-      } else if (type === 'checkpoint') {
-        [440, 554.37, 659.25, 880].forEach((f, idx) => {
-          const o = ctx.createOscillator();
-          const g = ctx.createGain();
-          o.connect(g);
-          g.connect(ctx.destination);
-          o.frequency.setValueAtTime(f, now + idx * 0.08);
-          g.gain.setValueAtTime(0.2, now + idx * 0.08);
-          g.gain.exponentialRampToValueAtTime(0.01, now + idx * 0.08 + 0.22);
-          o.start(now + idx * 0.08);
-          o.stop(now + idx * 0.08 + 0.22);
-        });
-      } else if (type === 'win') {
-        [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
-          const o = ctx.createOscillator();
-          const g = ctx.createGain();
-          o.connect(g);
-          g.connect(ctx.destination);
-          o.frequency.setValueAtTime(freq, now + idx * 0.12);
-          g.gain.setValueAtTime(0.28, now + idx * 0.12);
-          g.gain.exponentialRampToValueAtTime(0.01, now + idx * 0.12 + 0.4);
-          o.start(now + idx * 0.12);
-          o.stop(now + idx * 0.12 + 0.4);
-        });
-      }
-    } catch (_) {}
-  };
-
-  // Fetch current user from session
+  // Load User Data
   useEffect(() => {
-    fetch('/api/auth/me')
-      .then(res => (res.ok ? res.json() : null))
-      .then(data => {
-        if (data?.user) {
-          setProfile(prev => ({
-            ...prev,
-            name: data.user.name || 'Diego Seguro',
-            phone: data.user.phone || '11982854183',
-            saldo: Number(data.user.saldo ?? 1000),
-            bonus: Number(data.user.bonus ?? 0)
-          }));
+    async function loadData() {
+      try {
+        const res = await fetch('/api/auth/me');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.user) {
+            setProfile({
+              name: data.user.nome || 'Diego',
+              phone: data.user.telefone || '11982854183',
+              saldo: data.user.saldo ?? 1000,
+              bonus: data.user.saldo_bonus ?? 50,
+              avatar: data.user.avatar || 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=150',
+              victories: data.user.vitorias ?? 12
+            });
+          }
         }
-      })
-      .catch(() => {});
+      } catch {
+        // Fallback
+      }
+    }
+    loadData();
   }, []);
 
-  const formatTime = (secs: number) => {
-    const mins = Math.floor(secs / 60);
-    const remainder = Math.floor(secs % 60);
-    return `${mins.toString().padStart(2, '0')}:${remainder.toString().padStart(2, '0')}`;
-  };
-
-  // Jump or Dive Action
-  const handleJumpOrDive = () => {
+  // Jump action handler
+  const handleJump = () => {
+    if (!threeState.current || !isPlayingRef.current) return;
     const st = threeState.current;
-    if (!st || !st.isGameActive || st.isStunned) return;
-
-    if (st.isGrounded) {
-      // Jump
-      st.playerVel.y = 12.0;
+    if (st.isGrounded && !st.isStunned) {
+      // Jump physics matching CharacterControls.cs: Sqrt(2 * jumpHeight * gravity)
+      // With jumpHeight = 2.0, gravity = 32.0 => vY = 11.3
+      st.playerVel.y = 11.8;
       st.isGrounded = false;
       playSfx('jump');
-    } else if (!st.isDiving && st.diveTimer <= 0) {
-      // Mid-air Fall Guys Dive!
-      st.isDiving = true;
-      st.diveTimer = 0.6;
-      // Forward impulse in facing direction
-      const facingAngle = st.playerGroup.rotation.y;
-      st.playerVel.x += Math.cos(facingAngle) * 7.5;
-      st.playerVel.z += Math.sin(facingAngle) * 7.5;
-      st.playerVel.y = Math.max(st.playerVel.y, 3.5);
-      playSfx('dive');
     }
   };
 
   // Start Race
-  const startRace = (fee: number) => {
+  const startRace = async (fee: number) => {
     if (profile.saldo < fee) {
-      alert('Saldo insuficiente para entrar nesta corrida!');
+      alert('Saldo insuficiente para entrar na corrida! Por favor, faça uma recarga.');
       return;
     }
 
-    setProfile(prev => ({ ...prev, saldo: Math.max(0, prev.saldo - fee) }));
-    fetch('/api/game/iniciar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ valor_entrada: fee, modalidade: selectedMode, personagem: selectedCharId })
-    })
-      .then(res => (res.ok ? res.json() : null))
-      .then(data => {
-        if (data?.corrida_id) {
-          setActiveRaceId(data.corrida_id);
-          if (typeof data.saldo_restante === 'number') {
-            setProfile(prev => ({ ...prev, saldo: data.saldo_restante }));
-          }
-        }
-      })
-      .catch(() => {});
+    setLoading(true);
+    try {
+      const res = await fetch('/api/game/iniciar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taxa_inscricao: fee })
+      });
 
-    setActiveScreen('playing');
-    setScore(0);
-    setLives(3);
-    setCourseProgress(0);
-    setElapsedSeconds(0);
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.message || 'Erro ao iniciar partida');
+        setLoading(false);
+        return;
+      }
 
+      setProfile(prev => ({ ...prev, saldo: prev.saldo - fee }));
+    } catch {
+      // Offline / fallback allow
+      setProfile(prev => ({ ...prev, saldo: prev.saldo - fee }));
+    }
+
+    setLoading(false);
+    setSelectedFee(fee);
+    setActiveScreen('countdown');
     setCountdown(3);
-    playSfx('beep');
-    const cInterval = setInterval(() => {
-      setCountdown(prev => {
-        if (prev === 3) {
-          playSfx('beep');
-          return 2;
-        }
-        if (prev === 2) {
-          playSfx('beep');
-          return 1;
-        }
-        if (prev === 1) {
-          playSfx('go');
-          clearInterval(cInterval);
-          setTimeout(() => setCountdown(null), 500);
+
+    // Reset game state
+    if (threeState.current) {
+      const st = threeState.current;
+      st.playerPos.set(0, 2.0, 0);
+      st.playerVel.set(0, 0, 0);
+      st.currentCheckpoint.set(0, 2.0, 0);
+      st.isStunned = false;
+      st.stunTimer = 0;
+      st.invincibleTimer = 0;
+      cameraAngles.current.yaw = 0;
+      cameraAngles.current.pitch = 0.28;
+    }
+
+    setCoinsCollected(0);
+    setRaceProgress(0);
+    setPlacement(1);
+
+    const timer = setInterval(() => {
+      setCountdown(c => {
+        if (c <= 1) {
+          clearInterval(timer);
+          setActiveScreen('playing');
+          isPlayingRef.current = true;
           if (threeState.current) {
-            threeState.current.isGameActive = true;
-            threeState.current.startTime = performance.now();
+            threeState.current.gameStartTime = performance.now();
           }
-          return null;
+          return 0;
         }
-        return null;
+        return c - 1;
       });
     }, 1000);
   };
 
-  // Respawn at Last Checkpoint
-  const respawnAtCheckpoint = () => {
-    const st = threeState.current;
-    if (!st) return;
-    const cp = st.checkpoints[st.lastCheckpointIndex] ?? { x: 0, y: 1.5 };
-    st.playerPos.set(cp.x, cp.y + 2.5, 0);
-    st.playerVel.set(0, 0, 0);
-    st.isGrounded = false;
-    st.isDiving = false;
-    st.isStunned = false;
-    st.stunTimer = 0;
+  // Handle Finish Line Victory
+  const handleVictory = async () => {
+    if (!isPlayingRef.current) return;
+    isPlayingRef.current = false;
+    playSfx('win');
+
+    confetti({
+      particleCount: 160,
+      spread: 80,
+      origin: { y: 0.6 }
+    });
+
+    const finishSecs = threeState.current
+      ? (performance.now() - threeState.current.gameStartTime) / 1000
+      : 30;
+
+    const mins = Math.floor(finishSecs / 60);
+    const secs = Math.floor(finishSecs % 60);
+    setFinalTime(`${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`);
+
+    try {
+      const prize = selectedFee * (activeTab === 'x1' ? 1.9 : activeTab === 'trio' ? 2.7 : 4.2);
+      const res = await fetch('/api/game/finalizar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vitoria: true,
+          tempo_segundos: finishSecs,
+          taxa_inscricao: selectedFee,
+          premio_estimado: prize,
+          posicao: 1,
+          moedas: coinsCollected
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const novoSaldo = data.saldo_novo ?? data.saldo_atualizado;
+        if (typeof novoSaldo === 'number') {
+          setProfile(p => ({ ...p, saldo: novoSaldo, victories: p.victories + 1 }));
+        }
+      }
+    } catch {
+      // Fallback
+      setProfile(p => ({
+        ...p,
+        saldo: p.saldo + selectedFee * 2,
+        victories: p.victories + 1
+      }));
+    }
+
+    setActiveScreen('victory');
   };
 
-  // BUILD THE 3D ENGINE
+  // Setup Three.js 3D Obstacle Course Engine
   useEffect(() => {
-    if (activeScreen !== 'playing' || !mountRef.current) return;
+    if (!mountRef.current) return;
 
     const container = mountRef.current;
     const width = container.clientWidth;
@@ -471,389 +442,425 @@ export default function GamePage() {
 
     // 1. Scene, Camera, Renderer
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x70c5ff); // Clear sky blue
-    scene.fog = new THREE.Fog(0x70c5ff, 140, 360);
+    scene.background = new THREE.Color(0x38bdf8); // Sky blue
+    scene.fog = new THREE.FogExp2(0x38bdf8, 0.007);
 
-    const camera = new THREE.PerspectiveCamera(65, width / height, 0.1, 1000);
+    const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 500);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-    container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
     // 2. Lighting
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x88bbdd, 0.95);
-    scene.add(hemiLight);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+    scene.add(ambientLight);
 
-    const sun = new THREE.DirectionalLight(0xfff5d8, 1.4);
-    sun.position.set(50, 100, 60);
-    sun.castShadow = true;
-    sun.shadow.mapSize.width = 2048;
-    sun.shadow.mapSize.height = 2048;
-    sun.shadow.camera.near = 5;
-    sun.shadow.camera.far = 400;
-    sun.shadow.camera.left = -90;
-    sun.shadow.camera.right = 90;
-    sun.shadow.camera.top = 90;
-    sun.shadow.camera.bottom = -90;
-    scene.add(sun);
+    const dirLight = new THREE.DirectionalLight(0xfff7ed, 1.4);
+    dirLight.position.set(25, 45, 20);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.camera.near = 0.5;
+    dirLight.shadow.camera.far = 160;
+    dirLight.shadow.camera.left = -25;
+    dirLight.shadow.camera.right = 25;
+    dirLight.shadow.camera.top = 25;
+    dirLight.shadow.camera.bottom = -25;
+    scene.add(dirLight);
 
-    // 3. Clouds & Scenery
-    const cloudMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 });
-    for (let c = 0; c < 28; c++) {
-      const cloudGroup = new THREE.Group();
-      const numPuffs = 4 + Math.floor(Math.random() * 4);
-      for (let p = 0; p < numPuffs; p++) {
-        const puffGeo = new THREE.BoxGeometry(
-          4 + Math.random() * 4,
-          2.5 + Math.random() * 2,
-          3.5 + Math.random() * 3
-        );
-        const puff = new THREE.Mesh(puffGeo, cloudMat);
-        puff.position.set((p - numPuffs / 2) * 3.5, Math.random() * 1.5, Math.random() * 2);
-        cloudGroup.add(puff);
-      }
-      cloudGroup.position.set(
-        Math.random() * 380 - 40,
-        30 + Math.random() * 35,
-        Math.random() * 220 - 110
-      );
-      scene.add(cloudGroup);
+    // 3. Sky & Distant Clouds Decoration
+    const cloudGeo = new THREE.DodecahedronGeometry(6, 1);
+    const cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 });
+    for (let i = 0; i < 18; i++) {
+      const c = new THREE.Mesh(cloudGeo, cloudMat);
+      c.position.set(i * 14 - 10, 25 + Math.sin(i * 1.7) * 8, (i % 2 === 0 ? 1 : -1) * (20 + (i % 5) * 6));
+      scene.add(c);
     }
 
-    // 4. Solid Physics Platforms & Obstacles Arrays
+    // 4. Character Model: Authentic Fall Guys Capsule Bean matching Player.prefab
+    const playerGroup = new THREE.Group();
+
+    // Bean Body (Capsule geometry)
+    const beanMat = new THREE.MeshStandardMaterial({
+      color: 0xec4899, // Bright magenta pink bean
+      roughness: 0.28,
+      metalness: 0.12
+    });
+    const beanGeo = new THREE.CapsuleGeometry(0.5, 0.9, 16, 32);
+    const beanMesh = new THREE.Mesh(beanGeo, beanMat);
+    beanMesh.position.y = 0.95;
+    beanMesh.castShadow = true;
+    playerGroup.add(beanMesh);
+
+    // White Visor Faceplate matching Player.prefab (Cube 1)
+    const visorMat = new THREE.MeshStandardMaterial({
+      color: 0x0f172a, // Dark screen
+      roughness: 0.2,
+      metalness: 0.8
+    });
+    const visorGeo = new THREE.BoxGeometry(0.62, 0.38, 0.3);
+    const visorMesh = new THREE.Mesh(visorGeo, visorMat);
+    visorMesh.position.set(0.35, 1.15, 0); // Facing +X
+    playerGroup.add(visorMesh);
+
+    // Glowing cyan face eyes
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+    const eyeGeo = new THREE.CapsuleGeometry(0.04, 0.12, 8, 8);
+    const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+    leftEye.position.set(0.52, 1.18, -0.12);
+    playerGroup.add(leftEye);
+
+    const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+    rightEye.position.set(0.52, 1.18, 0.12);
+    playerGroup.add(rightEye);
+
+    // Cute Back Tank / Jetpack
+    const packMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, metalness: 0.5, roughness: 0.4 });
+    const packGeo = new THREE.BoxGeometry(0.3, 0.55, 0.45);
+    const backpackMesh = new THREE.Mesh(packGeo, packMat);
+    backpackMesh.position.set(-0.45, 1.05, 0);
+    playerGroup.add(backpackMesh);
+
+    scene.add(playerGroup);
+
+    // Ground Drop-Shadow for 3D Depth Perception
+    const shadowGeo = new THREE.CircleGeometry(0.58, 24);
+    const shadowMat = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.45,
+      depthWrite: false
+    });
+    const dropShadow = new THREE.Mesh(shadowGeo, shadowMat);
+    dropShadow.rotation.x = -Math.PI / 2;
+    scene.add(dropShadow);
+
+    // 5. Track Platforms & Obstacles Arrays
     const platforms: PlatformBox[] = [];
+    const fallingTiles: FallingTile[] = [];
     const pendulums: SwingingPendulum[] = [];
     const pushers: MovableObstacle[] = [];
     const spinners: SpinnerObstacle[] = [];
-    const fallingTiles: FallingTile[] = [];
     const bouncePads: BouncePad[] = [];
     const coins: CoinObject[] = [];
-    const rbCubes: RBCube[] = [];
-    const checkpoints = [
-      { x: 0, y: 1.0 },
-      { x: 68, y: 1.0 },
-      { x: 124, y: 1.0 },
-      { x: 180, y: 1.0 },
-      { x: 222, y: 1.0 }
-    ];
+    const knockCubes: KnockCube[] = [];
+    const checkpoints: Checkpoint[] = [];
 
-    // Helper to create Solid Seamless Platforms
-    const addPlatform = (x1: number, x2: number, z1: number, z2: number, surfaceY: number, color: number, name = '') => {
-      const w = x2 - x1;
-      const d = z2 - z1;
-      const h = 2.0;
-      const posX = (x1 + x2) / 2;
-      const posZ = (z1 + z2) / 2;
-      const posY = surfaceY - h / 2;
+    // Helper: Add Solid Ground Block
+    const addPlatformBlock = (
+      minX: number,
+      maxX: number,
+      minZ: number,
+      maxZ: number,
+      surfaceY: number,
+      color: number,
+      withRails = true
+    ) => {
+      const lenX = maxX - minX;
+      const lenZ = maxZ - minZ;
+      const thickness = 2.0;
+      const centerY = surfaceY - thickness / 2;
+      const centerX = (minX + maxX) / 2;
+      const centerZ = (minZ + maxZ) / 2;
 
-      const geo = new THREE.BoxGeometry(w, h, d);
-      const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.1 });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(posX, posY, posZ);
-      mesh.receiveShadow = true;
-      mesh.castShadow = true;
-      scene.add(mesh);
-
-      // Edge Lip Barrier/Trim
-      const trimGeo = new THREE.BoxGeometry(w, 0.3, 0.3);
-      const trimMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 });
-      const trim1 = new THREE.Mesh(trimGeo, trimMat);
-      trim1.position.set(posX, surfaceY + 0.15, z1);
-      scene.add(trim1);
-      const trim2 = new THREE.Mesh(trimGeo, trimMat);
-      trim2.position.set(posX, surfaceY + 0.15, z2);
-      scene.add(trim2);
-
-      platforms.push({
-        minX: x1,
-        maxX: x2,
-        minZ: z1,
-        maxZ: z2,
-        surfaceY
+      const platGeo = new THREE.BoxGeometry(lenX, thickness, lenZ);
+      const platMat = new THREE.MeshStandardMaterial({
+        color,
+        roughness: 0.45,
+        metalness: 0.1
       });
+      const platMesh = new THREE.Mesh(platGeo, platMat);
+      platMesh.position.set(centerX, centerY, centerZ);
+      platMesh.receiveShadow = true;
+      scene.add(platMesh);
+
+      platforms.push({ minX, maxX, minZ, maxZ, surfaceY });
+
+      // Guard rails
+      if (withRails) {
+        const railMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.3 }); // Yellow rails
+        const railGeo = new THREE.CylinderGeometry(0.12, 0.12, lenX, 12);
+
+        const leftRail = new THREE.Mesh(railGeo, railMat);
+        leftRail.rotation.z = Math.PI / 2;
+        leftRail.position.set(centerX, surfaceY + 0.5, minZ + 0.1);
+        scene.add(leftRail);
+
+        const rightRail = new THREE.Mesh(railGeo, railMat);
+        rightRail.rotation.z = Math.PI / 2;
+        rightRail.position.set(centerX, surfaceY + 0.5, maxZ - 0.1);
+        scene.add(rightRail);
+      }
     };
 
-    // Helper to spawn spinning 3D Coins
-    const spawnCoin = (x: number, y: number, z: number) => {
-      const coinGroup = new THREE.Group();
-      coinGroup.position.set(x, y, z);
-
-      const coinGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.14, 16);
+    // Helper: Add Coin
+    const addCoin = (x: number, y: number, z: number) => {
+      const cGroup = new THREE.Group();
+      const coinGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.12, 16);
       const coinMat = new THREE.MeshStandardMaterial({
         color: 0xffd700,
-        metalness: 0.9,
-        roughness: 0.15,
+        metalness: 0.85,
+        roughness: 0.2,
         emissive: 0xffaa00,
-        emissiveIntensity: 0.5
+        emissiveIntensity: 0.25
       });
       const coinMesh = new THREE.Mesh(coinGeo, coinMat);
       coinMesh.rotation.x = Math.PI / 2;
-      coinGroup.add(coinMesh);
-
-      const starGeo = new THREE.BoxGeometry(0.4, 0.4, 0.18);
-      const starMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-      const star = new THREE.Mesh(starGeo, starMat);
-      star.rotation.z = Math.PI / 4;
-      coinGroup.add(star);
-
-      scene.add(coinGroup);
-      coins.push({ mesh: coinGroup, collected: false });
+      cGroup.add(coinMesh);
+      cGroup.position.set(x, y, z);
+      scene.add(cGroup);
+      coins.push({ group: cGroup, x, y, z, collected: false });
     };
 
-    // ==============================================================
-    // 5. BUILD LEVEL: 100% SEAMLESS & BUG-FREE FALL GUYS COURSE
-    // ==============================================================
+    // --- COURSE CONSTRUCTION MATCHING ObstacleCoursePack & Scene2.unity ---
 
-    // ZONE 0: Start Deck (x: -12 to 18, z: -7 to 7, y: 1.0)
-    addPlatform(-12, 18, -7, 7, 1.0, 0xfbbf24, 'StartDeck');
+    // STARTING ARENA (x: -8 to 18, z: -7 to 7, y: 0)
+    addPlatformBlock(-8, 18, -7, 7, 0, 0x0284c7, true);
+    checkpoints.push({ x: 0, y: 0, z: 0, radius: 4.0, activated: true });
 
-    // Start Checkered Arch
-    const archMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5 });
-    const p1 = new THREE.Mesh(new THREE.BoxGeometry(0.8, 6, 0.8), archMat);
-    p1.position.set(0, 4, -7);
-    scene.add(p1);
-    const p2 = new THREE.Mesh(new THREE.BoxGeometry(0.8, 6, 0.8), archMat);
-    p2.position.set(0, 4, 7);
-    scene.add(p2);
-    const cBar = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 15), archMat);
-    cBar.position.set(0, 7, 0);
-    scene.add(cBar);
+    // Floating Coins on Start
+    addCoin(4, 1.2, -2);
+    addCoin(4, 1.2, 0);
+    addCoin(4, 1.2, 2);
+    addCoin(10, 1.2, -1.5);
+    addCoin(10, 1.2, 1.5);
 
-    // STAGE 1: Pendulum Bridge (x: 18 to 62, z: -4 to 4, y: 1.0)
-    addPlatform(18, 62, -4, 4, 1.0, 0x38bdf8, 'PendulumBridge');
+    // SECTION 1: SWINGING PENDULUMS (x: 18 to 56, z: -5.5 to 5.5, y: 0)
+    addPlatformBlock(18, 56, -5.5, 5.5, 0, 0x0ea5e9, true);
 
-    // 4 Giant Swinging Pendulums (Pendulum.cs limit=70deg)
-    const pendXs = [26, 36, 46, 56];
-    pendXs.forEach((pX, idx) => {
-      const gArch = new THREE.Group();
-      gArch.position.set(pX, 0, 0);
+    const pendPositions = [26, 34, 42, 50];
+    pendPositions.forEach((posX, idx) => {
+      const pGroup = new THREE.Group();
+      pGroup.position.set(posX, 0, 0);
 
-      const pole1 = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 10, 8), archMat);
-      pole1.position.set(0, 5, -5.2);
-      gArch.add(pole1);
-      const pole2 = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 10, 8), archMat);
-      pole2.position.set(0, 5, 5.2);
-      gArch.add(pole2);
-      const topB = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 11), archMat);
-      topB.position.set(0, 10, 0);
-      gArch.add(topB);
+      // Overhead arch support
+      const archMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.6 });
+      const pillarGeo = new THREE.CylinderGeometry(0.25, 0.25, 8.5, 12);
+      const pLeft = new THREE.Mesh(pillarGeo, archMat);
+      pLeft.position.set(0, 4.25, -5.2);
+      pGroup.add(pLeft);
 
+      const pRight = new THREE.Mesh(pillarGeo, archMat);
+      pRight.position.set(0, 4.25, 5.2);
+      pGroup.add(pRight);
+
+      const beamGeo = new THREE.BoxGeometry(0.5, 0.5, 10.5);
+      const topBeam = new THREE.Mesh(beamGeo, archMat);
+      topBeam.position.set(0, 8.5, 0);
+      pGroup.add(topBeam);
+
+      // Pivot Object
       const pivot = new THREE.Object3D();
-      pivot.position.set(0, 10, 0);
+      pivot.position.set(0, 8.5, 0);
+      pGroup.add(pivot);
 
-      const shaftMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8 });
-      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 8.4, 8), shaftMat);
-      shaft.position.set(0, -4.2, 0);
-      pivot.add(shaft);
+      // Rod
+      const rodGeo = new THREE.CylinderGeometry(0.12, 0.12, 7.5, 8);
+      const rodMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8 });
+      const rod = new THREE.Mesh(rodGeo, rodMat);
+      rod.position.y = -3.75;
+      pivot.add(rod);
 
-      const hammerMat = new THREE.MeshStandardMaterial({ color: 0xef4444, metalness: 0.5, roughness: 0.2 });
-      const hammer = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.3, 1.8, 16), hammerMat);
+      // Hammer Bob
+      const hammerGeo = new THREE.CylinderGeometry(0.9, 0.9, 1.6, 16);
+      const hammerMat = new THREE.MeshStandardMaterial({
+        color: 0xef4444, // Red lethal hammer
+        metalness: 0.4,
+        roughness: 0.3
+      });
+      const hammer = new THREE.Mesh(hammerGeo, hammerMat);
       hammer.rotation.z = Math.PI / 2;
-      hammer.position.set(0, -8.3, 0);
+      hammer.position.y = -7.4;
       hammer.castShadow = true;
       pivot.add(hammer);
 
-      gArch.add(pivot);
-      scene.add(gArch);
+      scene.add(pGroup);
 
       pendulums.push({
-        group: gArch,
+        group: pGroup,
         pivotObj: pivot,
         hammerMesh: hammer,
-        speed: 2.2,
+        speed: 2.3 + (idx % 2) * 0.4,
         limit: 1.15,
-        offset: idx * 0.95
+        offset: idx * 1.4
       });
 
-      spawnCoin(pX + 5, 2.2, idx % 2 === 0 ? 1.8 : -1.8);
+      addCoin(posX, 1.2, 0);
     });
 
-    // Checkpoint 1 Island (x: 62 to 74, z: -6 to 6, y: 1.0)
-    addPlatform(62, 74, -6, 6, 1.0, 0x10b981, 'CP1');
-    spawnCoin(68, 2.2, 0);
+    // CHECKPOINT 1 (x: 56 to 68, z: -6 to 6, y: 0)
+    addPlatformBlock(56, 68, -6, 6, 0, 0x10b981, true); // Emerald green checkpoint pad
+    checkpoints.push({ x: 62, y: 0, z: 0, radius: 4.5, activated: false });
 
-    // STAGE 2: Pusher Alley (x: 74 to 118, z: -5 to 5, y: 1.0)
-    addPlatform(74, 118, -5, 5, 1.0, 0xa855f7, 'PusherAlley');
+    // SECTION 2: SLIDING PUSHERS (x: 68 to 104, z: -5.0 to 5.0, y: 0)
+    addPlatformBlock(68, 104, -5.0, 5.0, 0, 0x0284c7, true);
 
-    // 4 Sliding Pusher Blocks (MovableObs.cs)
-    const pushXs = [82, 90, 100, 110];
-    pushXs.forEach((px, idx) => {
-      const pGeo = new THREE.BoxGeometry(2.6, 3.6, 4.8);
+    const pusherX = [74, 82, 90, 98];
+    pusherX.forEach((px, idx) => {
+      const pGeo = new THREE.BoxGeometry(2.4, 2.2, 3.8);
       const pMat = new THREE.MeshStandardMaterial({
-        color: idx % 2 === 0 ? 0xf97316 : 0xeab308,
-        roughness: 0.3
+        color: 0xf97316, // Orange punch block
+        metalness: 0.3,
+        roughness: 0.4
       });
       const pMesh = new THREE.Mesh(pGeo, pMat);
-      const startZ = idx % 2 === 0 ? -4.5 : 4.5;
-      pMesh.position.set(px, 2.8, startZ);
+      pMesh.position.set(px, 1.1, idx % 2 === 0 ? -2.2 : 2.2);
       pMesh.castShadow = true;
       scene.add(pMesh);
 
       pushers.push({
         mesh: pMesh,
-        startZ: 0,
-        distance: 4.6,
-        speed: 3.4,
+        startZ: idx % 2 === 0 ? -2.5 : 2.5,
+        distance: 5.0,
+        speed: 3.2,
         dir: idx % 2 === 0 ? 1 : -1,
-        bounds: { minX: px - 1.3, maxX: px + 1.3, halfDepth: 2.4 }
+        bounds: { minX: px - 1.2, maxX: px + 1.2, halfDepth: 1.9 }
       });
 
-      spawnCoin(px, 2.2, 0);
+      addCoin(px, 1.2, (idx % 2 === 0 ? 1 : -1) * 2.0);
     });
 
-    // Checkpoint 2 Island (x: 118 to 130, z: -6 to 6, y: 1.0)
-    addPlatform(118, 130, -6, 6, 1.0, 0x10b981, 'CP2');
-    spawnCoin(124, 2.2, 0);
+    // SECTION 3: COLLAPSING PLATFORMS (x: 104 to 138, z: -5.5 to 5.5, y: 0)
+    // Connecting side rails but modular falling floor tiles
+    const tileRows = 7;
+    const tileCols = 3;
+    const tileStartX = 105;
+    const tileW = 4.2;
+    const tileD = 3.2;
 
-    // STAGE 3: Rotating Platform & Sweeper Arms (x: 130 to 174)
-    // Entry bridge (x: 130 to 138, z: -3.5 to 3.5)
-    addPlatform(130, 138, -3.5, 3.5, 1.0, 0xec4899, 'BridgeToRot');
+    for (let r = 0; r < tileRows; r++) {
+      for (let c = 0; c < tileCols; c++) {
+        const tx = tileStartX + r * (tileW + 0.45);
+        const tz = (c - 1) * (tileD + 0.4);
 
-    // Circular Arena (x: 138 to 166, z: -14 to 14, center: 152)
-    addPlatform(138, 166, -14, 14, 1.0, 0x06b6d4, 'RotatingArena');
-
-    // Center Spindle with 4 Sweeper Crossbars (Rotator.cs)
-    const spinGroup = new THREE.Group();
-    spinGroup.position.set(152, 1.0, 0);
-
-    const spindleGeo = new THREE.CylinderGeometry(1.2, 1.2, 3.2, 16);
-    const spindleMat = new THREE.MeshStandardMaterial({ color: 0x1e293b });
-    const spindle = new THREE.Mesh(spindleGeo, spindleMat);
-    spindle.position.y = 1.6;
-    spinGroup.add(spindle);
-
-    for (let arm = 0; arm < 4; arm++) {
-      const armGeo = new THREE.BoxGeometry(0.7, 0.9, 11.5);
-      const armMat = new THREE.MeshStandardMaterial({
-        color: arm % 2 === 0 ? 0xff0055 : 0xffdd00,
-        roughness: 0.3
-      });
-      const armMesh = new THREE.Mesh(armGeo, armMat);
-      armMesh.position.set(0, 0.8, 5.8);
-      armMesh.rotation.y = (arm * Math.PI) / 2;
-      armMesh.castShadow = true;
-      spinGroup.add(armMesh);
-    }
-    scene.add(spinGroup);
-
-    spinners.push({
-      group: spinGroup,
-      centerX: 152,
-      centerZ: 0,
-      radius: 12.0,
-      speed: 1.85
-    });
-
-    spawnCoin(146, 2.2, 5);
-    spawnCoin(158, 2.2, -5);
-    spawnCoin(152, 2.2, 7);
-    spawnCoin(152, 2.2, -7);
-
-    // Exit bridge (x: 166 to 174, z: -3.5 to 3.5)
-    addPlatform(166, 174, -3.5, 3.5, 1.0, 0xec4899, 'BridgeFromRot');
-
-    // Checkpoint 3 Island (x: 174 to 186, z: -6 to 6, y: 1.0)
-    addPlatform(174, 186, -6, 6, 1.0, 0x10b981, 'CP3');
-    spawnCoin(180, 2.2, 0);
-
-    // STAGE 4: Collapsing Fall Platforms (x: 186 to 216)
-    // 5 Columns x 3 Rows of stepping tiles
-    const colXs = [190, 196, 202, 208, 214];
-    const rowZs = [-3.0, 0, 3.0];
-    colXs.forEach(cx => {
-      rowZs.forEach(rz => {
-        const tGeo = new THREE.BoxGeometry(4.2, 0.8, 2.4);
-        const tMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.4 });
-        const tMesh = new THREE.Mesh(tGeo, tMat);
-        tMesh.position.set(cx, 0.6, rz);
-        tMesh.receiveShadow = true;
-        scene.add(tMesh);
+        const tileGeo = new THREE.BoxGeometry(tileW, 0.6, tileD);
+        const tileMat = new THREE.MeshStandardMaterial({
+          color: (r + c) % 2 === 0 ? 0xec4899 : 0x8b5cf6, // Pastel pink and purple
+          roughness: 0.4
+        });
+        const tileMesh = new THREE.Mesh(tileGeo, tileMat);
+        tileMesh.position.set(tx + tileW / 2, -0.3, tz);
+        tileMesh.receiveShadow = true;
+        scene.add(tileMesh);
 
         fallingTiles.push({
-          mesh: tMesh,
-          initialY: 0.6,
+          mesh: tileMesh,
+          initialY: -0.3,
           isStepped: false,
           stepTimer: 0,
           isFalling: false,
           fallSpeed: 0,
           isRespawning: false,
           respawnTimer: 0,
-          bounds: { minX: cx - 2.1, maxX: cx + 2.1, minZ: rz - 1.2, maxZ: rz + 1.2 }
+          bounds: {
+            minX: tx,
+            maxX: tx + tileW,
+            minZ: tz - tileD / 2,
+            maxZ: tz + tileD / 2
+          }
         });
 
-        if (Math.random() < 0.4) {
-          spawnCoin(cx, 2.0, rz);
+        if (r % 2 === 0 && c === 1) {
+          addCoin(tx + tileW / 2, 1.2, tz);
         }
+      }
+    }
+
+    // CHECKPOINT 2 (x: 138 to 150, z: -6 to 6, y: 0)
+    addPlatformBlock(138, 150, -6, 6, 0, 0x10b981, true);
+    checkpoints.push({ x: 144, y: 0, z: 0, radius: 4.5, activated: false });
+
+    // SECTION 4: ROTATING ARMS (x: 150 to 178, z: -6 to 6, y: 0)
+    addPlatformBlock(150, 178, -6, 6, 0, 0x0284c7, true);
+
+    const spinCenters = [158, 170];
+    spinCenters.forEach((cx, idx) => {
+      const sGroup = new THREE.Group();
+      sGroup.position.set(cx, 0, 0);
+
+      // Base cylinder
+      const baseGeo = new THREE.CylinderGeometry(0.8, 0.9, 1.4, 16);
+      const baseMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.7 });
+      const baseMesh = new THREE.Mesh(baseGeo, baseMat);
+      baseMesh.position.y = 0.7;
+      sGroup.add(baseMesh);
+
+      // Arm
+      const armGeo = new THREE.BoxGeometry(0.5, 0.7, 10.4);
+      const armMat = new THREE.MeshStandardMaterial({
+        color: 0xf59e0b, // Amber beam
+        metalness: 0.5,
+        roughness: 0.3
       });
+      const armMesh = new THREE.Mesh(armGeo, armMat);
+      armMesh.position.y = 0.85;
+      armMesh.castShadow = true;
+      sGroup.add(armMesh);
+
+      scene.add(sGroup);
+
+      spinners.push({
+        group: sGroup,
+        centerX: cx,
+        centerZ: 0,
+        radius: 5.2,
+        speed: (idx % 2 === 0 ? 1 : -1) * 2.2
+      });
+
+      addCoin(cx - 2.5, 1.2, 0);
+      addCoin(cx + 2.5, 1.2, 0);
     });
 
-    // Checkpoint 4 Deck (x: 216 to 228, z: -6 to 6, y: 1.0)
-    addPlatform(216, 228, -6, 6, 1.0, 0x10b981, 'CP4');
-    spawnCoin(222, 2.2, 0);
+    // SECTION 5: TRAMPOLINE BOUNCE PAD (x: 178 to 190, z: -5 to 5, y: 0)
+    addPlatformBlock(178, 190, -5, 5, 0, 0x3b82f6, true);
 
-    // STAGE 5: Trampoline Bounce Pad to High Deck (x: 228 to 264)
-    // Lower Launch Deck (x: 228 to 238, z: -5 to 5, y: 1.0)
-    addPlatform(228, 238, -5, 5, 1.0, 0x3b82f6, 'LaunchDeck');
+    const bPadGeo = new THREE.CylinderGeometry(1.6, 1.8, 0.45, 24);
+    const bPadMat = new THREE.MeshStandardMaterial({
+      color: 0x06b6d4, // Cyan trampoline pad
+      emissive: 0x0891b2,
+      emissiveIntensity: 0.4
+    });
+    const bPadMesh = new THREE.Mesh(bPadGeo, bPadMat);
+    bPadMesh.position.set(184, 0.22, 0);
+    scene.add(bPadMesh);
 
-    // Trampoline Bounce Pad (Bounce.cs)
-    const padMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(2.4, 2.6, 0.4, 32),
-      new THREE.MeshStandardMaterial({
-        color: 0x10b981,
-        emissive: 0x059669,
-        emissiveIntensity: 0.9,
-        roughness: 0.2
-      })
-    );
-    padMesh.position.set(233, 1.2, 0);
-    scene.add(padMesh);
-
-    const ringMesh = new THREE.Mesh(
-      new THREE.TorusGeometry(2.3, 0.12, 8, 32),
-      new THREE.MeshBasicMaterial({ color: 0xffffff })
-    );
+    const ringGeo = new THREE.TorusGeometry(1.7, 0.12, 8, 24);
+    const ringMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xeab308, emissiveIntensity: 0.5 });
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
     ringMesh.rotation.x = Math.PI / 2;
-    ringMesh.position.set(233, 1.42, 0);
+    ringMesh.position.set(184, 0.3, 0);
     scene.add(ringMesh);
 
     bouncePads.push({
-      mesh: padMesh,
+      mesh: bPadMesh,
       ringMesh,
-      x: 233,
-      y: 1.2,
+      x: 184,
+      y: 0.22,
       z: 0,
-      radius: 2.5,
-      force: 22.0 // Giant trampoline jump!
+      radius: 1.8,
+      force: 21.0 // High jump directly onto upper victory platform
     });
 
-    // Elevated Deck (x: 242 to 264, z: -6 to 6, surfaceY: 8.0)
-    addPlatform(242, 264, -6, 6, 8.0, 0xf43f5e, 'HighDeck');
-    spawnCoin(238, 11.0, 0); // High apex coin!
-    spawnCoin(250, 9.2, 2);
-    spawnCoin(250, 9.2, -2);
+    // SECTION 6: ELEVATED FINISH PLATFORM & RBCUBES (x: 194 to 226, z: -8 to 8, y: 7.0)
+    addPlatformBlock(194, 226, -8, 8, 7.0, 0x10b981, true);
 
-    // Stacks of Knockdown Physics Toy Cubes (RBCubes.prefab)
-    for (let row = 0; row < 3; row++) {
-      for (let col = 0; col < 4; col++) {
-        const cGeo = new THREE.BoxGeometry(0.9, 0.9, 0.9);
-        const cMat = new THREE.MeshStandardMaterial({
-          color: (row + col) % 3 === 0 ? 0xfacc15 : (row + col) % 3 === 1 ? 0x38bdf8 : 0xf43f5e,
-          roughness: 0.4
-        });
-        const cMesh = new THREE.Mesh(cGeo, cMat);
-        const cubeX = 252 + col * 1.0;
-        const cubeY = 8.5 + row * 0.95;
-        const cubeZ = (col - 1.5) * 1.0;
-        cMesh.position.set(cubeX, cubeY, cubeZ);
+    // RBCubes: Stack of physical cubes the player can knock down
+    const cubeMat = new THREE.MeshStandardMaterial({ color: 0xec4899, roughness: 0.3 });
+    const cubeGeo = new THREE.BoxGeometry(0.85, 0.85, 0.85);
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        const cMesh = new THREE.Mesh(cubeGeo, cubeMat);
+        const cx = 202 + i * 0.9;
+        const cy = 7.0 + 0.45 + (j % 2) * 0.9;
+        const cz = (i - 1) * 1.1;
+        cMesh.position.set(cx, cy, cz);
         cMesh.castShadow = true;
         scene.add(cMesh);
 
-        rbCubes.push({
+        knockCubes.push({
           mesh: cMesh,
           vx: 0,
           vy: 0,
@@ -861,167 +868,95 @@ export default function GamePage() {
           rx: 0,
           ry: 0,
           rz: 0,
-          groundY: 8.45
+          groundY: 7.0 + 0.42
         });
       }
     }
 
-    // STAGE 6: Checkered Finish Line (x: 264 to 286, z: -7 to 7, surfaceY: 8.0)
-    addPlatform(264, 286, -7, 7, 8.0, 0xfbbf24, 'FinishDeck');
+    // FINISH LINE ARCH & BANNER (x: 214)
+    const archMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.8 });
+    const archPostGeo = new THREE.CylinderGeometry(0.35, 0.35, 6, 16);
 
-    // Grand Checkered Finish Arch (FinishLine.cs threshold = 270)
-    const fArch = new THREE.Group();
-    fArch.position.set(270, 8.0, 0);
+    const fLeft = new THREE.Mesh(archPostGeo, archMat);
+    fLeft.position.set(214, 10.0, -6.5);
+    scene.add(fLeft);
 
-    const fP1 = new THREE.Mesh(new THREE.BoxGeometry(1, 8, 1), archMat);
-    fP1.position.set(0, 4, -6.5);
-    fArch.add(fP1);
-    const fP2 = new THREE.Mesh(new THREE.BoxGeometry(1, 8, 1), archMat);
-    fP2.position.set(0, 4, 6.5);
-    fArch.add(fP2);
-    const fTop = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.8, 14), archMat);
-    fTop.position.set(0, 7.5, 0);
-    fArch.add(fTop);
+    const fRight = new THREE.Mesh(archPostGeo, archMat);
+    fRight.position.set(214, 10.0, 6.5);
+    scene.add(fRight);
 
-    // Canvas Checkered Finish Banner
-    const cv = document.createElement('canvas');
-    cv.width = 256;
-    cv.height = 64;
-    const ctx = cv.getContext('2d');
-    if (ctx) {
-      const sz = 32;
-      for (let x = 0; x < 256; x += sz) {
-        for (let y = 0; y < 64; y += sz) {
-          ctx.fillStyle = (x / sz + y / sz) % 2 === 0 ? '#ffffff' : '#000000';
-          ctx.fillRect(x, y, sz, sz);
+    const fCrossGeo = new THREE.BoxGeometry(0.7, 0.7, 13.5);
+    const fCross = new THREE.Mesh(fCrossGeo, archMat);
+    fCross.position.set(214, 13.0, 0);
+    scene.add(fCross);
+
+    // Checkered Banner
+    const bannerCanvas = document.createElement('canvas');
+    bannerCanvas.width = 512;
+    bannerCanvas.height = 128;
+    const bctx = bannerCanvas.getContext('2d')!;
+    bctx.fillStyle = '#ffffff';
+    bctx.fillRect(0, 0, 512, 128);
+    bctx.fillStyle = '#000000';
+    const squareSize = 32;
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 16; c++) {
+        if ((r + c) % 2 === 0) {
+          bctx.fillRect(c * squareSize, r * squareSize, squareSize, squareSize);
         }
       }
     }
-    const checkTex = new THREE.CanvasTexture(cv);
-    const banner = new THREE.Mesh(new THREE.PlaneGeometry(13.6, 1.4), new THREE.MeshBasicMaterial({ map: checkTex, side: THREE.DoubleSide }));
-    banner.rotation.y = Math.PI / 2;
-    banner.position.set(-0.62, 7.5, 0);
-    fArch.add(banner);
+    bctx.fillStyle = '#de9612';
+    bctx.fillRect(64, 28, 384, 72);
+    bctx.fillStyle = '#ffffff';
+    bctx.font = 'bold 44px Arial';
+    bctx.textAlign = 'center';
+    bctx.fillText('★ FINISH ★', 256, 78);
 
-    scene.add(fArch);
+    const bannerTex = new THREE.CanvasTexture(bannerCanvas);
+    const bannerMat = new THREE.MeshBasicMaterial({ map: bannerTex, side: THREE.DoubleSide });
+    const bannerGeo = new THREE.PlaneGeometry(12.8, 3.2);
+    const bannerMesh = new THREE.Mesh(bannerGeo, bannerMat);
+    bannerMesh.position.set(214, 11.5, 0);
+    bannerMesh.rotation.y = Math.PI / 2;
+    scene.add(bannerMesh);
 
-    // ==============================================================
-    // 6. BUILD FALL GUYS BEAN CHARACTER (Player.prefab)
-    // ==============================================================
-    const playerGroup = new THREE.Group();
-    playerGroup.position.set(0, 1.0, 0);
-
-    // Soft Blob Drop Shadow under player (Essential for 3D platformers!)
-    const shadowGeo = new THREE.PlaneGeometry(1.2, 1.2);
-    const shadowMat = new THREE.MeshBasicMaterial({
-      color: 0x000000,
-      transparent: true,
-      opacity: 0.35,
-      depthWrite: false
-    });
-    const shadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
-    shadowMesh.rotation.x = -Math.PI / 2;
-    shadowMesh.position.y = 0.05;
-    scene.add(shadowMesh);
-
-    // Capsule Bean Body
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color: selectedColor,
-      roughness: 0.32,
-      metalness: 0.08
-    });
-    const bodyGeo = new THREE.CapsuleGeometry(0.52, 0.72, 16, 16);
-    const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
-    bodyMesh.position.y = 0.88;
-    bodyMesh.castShadow = true;
-    playerGroup.add(bodyMesh);
-
-    // Iconic White Oval Visor / Faceplate
-    const visorGeo = new THREE.BoxGeometry(0.5, 0.38, 0.22);
-    const visorMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
-    const visor = new THREE.Mesh(visorGeo, visorMat);
-    visor.position.set(0.38, 1.02, 0);
-    visor.castShadow = true;
-    playerGroup.add(visor);
-
-    // Expressive Eyes
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-    const eyeGeo = new THREE.SphereGeometry(0.065, 8, 8);
-    const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
-    leftEye.position.set(0.48, 1.06, -0.12);
-    playerGroup.add(leftEye);
-
-    const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
-    rightEye.position.set(0.48, 1.06, 0.12);
-    playerGroup.add(rightEye);
-
-    // Limbs
-    const limbMat = new THREE.MeshStandardMaterial({ color: selectedColor, roughness: 0.4 });
-    const legGeo = new THREE.CapsuleGeometry(0.14, 0.3, 8, 8);
-    const leftLeg = new THREE.Mesh(legGeo, limbMat);
-    leftLeg.position.set(0, 0.24, -0.22);
-    leftLeg.castShadow = true;
-    playerGroup.add(leftLeg);
-
-    const rightLeg = new THREE.Mesh(legGeo, limbMat);
-    rightLeg.position.set(0, 0.24, 0.22);
-    rightLeg.castShadow = true;
-    playerGroup.add(rightLeg);
-
-    const armGeo = new THREE.CapsuleGeometry(0.12, 0.36, 8, 8);
-    const leftArm = new THREE.Mesh(armGeo, limbMat);
-    leftArm.position.set(0, 0.82, -0.52);
-    leftArm.castShadow = true;
-    playerGroup.add(leftArm);
-
-    const rightArm = new THREE.Mesh(armGeo, limbMat);
-    rightArm.position.set(0, 0.82, 0.52);
-    rightArm.castShadow = true;
-    playerGroup.add(rightArm);
-
-    scene.add(playerGroup);
-
-    // 7. Store in Ref
+    // Save Initial Three State
     threeState.current = {
+      renderer,
       scene,
       camera,
-      renderer,
       playerGroup,
-      bodyMesh,
-      leftLeg,
-      rightLeg,
-      leftArm,
-      rightArm,
-      shadowMesh,
+      dropShadow,
+      visorMesh,
+      backpackMesh,
+      platforms,
+      fallingTiles,
       pendulums,
       pushers,
       spinners,
-      fallingTiles,
       bouncePads,
       coins,
-      rbCubes,
-      platforms,
+      knockCubes,
       checkpoints,
-      lastCheckpointIndex: 0,
-      playerPos: new THREE.Vector3(0, 1.0, 0),
+      currentCheckpoint: new THREE.Vector3(0, 2.0, 0),
+      playerPos: new THREE.Vector3(0, 2.0, 0),
       playerVel: new THREE.Vector3(0, 0, 0),
-      isGrounded: true,
-      isDiving: false,
-      diveTimer: 0,
+      isGrounded: false,
       isStunned: false,
       stunTimer: 0,
-      walkAnimTimer: 0,
-      isGameActive: false,
-      startTime: performance.now(),
-      animId: 0
+      invincibleTimer: 0,
+      walkTimer: 0,
+      gameStartTime: performance.now(),
+      animationFrameId: 0
     };
 
-    // 8. Event Handlers
+    // 6. User Input Listeners
     const handleKeyDown = (e: KeyboardEvent) => {
       keysPressed.current[e.key.toLowerCase()] = true;
       if (e.key === ' ' || e.code === 'Space') {
         e.preventDefault();
-        handleJumpOrDive();
+        handleJump();
       }
     };
 
@@ -1043,7 +978,7 @@ export default function GamePage() {
       mouseOrbit.current.lastY = e.clientY;
 
       cameraAngles.current.yaw -= dx * 0.006;
-      cameraAngles.current.pitch = Math.max(-0.25, Math.min(1.1, cameraAngles.current.pitch + dy * 0.005));
+      cameraAngles.current.pitch = Math.max(-0.25, Math.min(1.0, cameraAngles.current.pitch + dy * 0.005));
     };
 
     const handleMouseUp = () => {
@@ -1051,7 +986,7 @@ export default function GamePage() {
     };
 
     const handleWheel = (e: WheelEvent) => {
-      cameraAngles.current.distance = Math.max(4.5, Math.min(12.0, cameraAngles.current.distance + e.deltaY * 0.005));
+      cameraAngles.current.distance = Math.max(4.0, Math.min(12.0, cameraAngles.current.distance + e.deltaY * 0.005));
     };
 
     const handleResize = () => {
@@ -1068,28 +1003,20 @@ export default function GamePage() {
     window.addEventListener('mousedown', handleMouseDown);
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
-    window.addEventListener('wheel', handleWheel);
+    window.addEventListener('wheel', handleWheel, { passive: true });
     window.addEventListener('resize', handleResize);
 
-    // ==============================================================
-    // 9. MAIN GAME LOOP: ROCK-SOLID 60 FPS PHYSICS
-    // ==============================================================
+    // 7. Physics Loop matching CharacterControls.cs
     let lastTime = performance.now();
 
-    const animate = (now: number) => {
-      const dt = Math.min((now - lastTime) / 1000, 0.05); // Safe dt clamp
-      lastTime = now;
+    const animate = (currentTime: number) => {
+      const dt = Math.min((currentTime - lastTime) / 1000, 0.05); // Clamp dt to prevent tunneling
+      lastTime = currentTime;
 
       const st = threeState.current;
-      if (!st) return;
-
-      if (st.isGameActive) {
-        // A. Timer
-        const elapsed = (now - st.startTime) / 1000;
-        setElapsedSeconds(elapsed);
-
-        // B. Movement Input
-        let inputX = 0; // Forward / Back
+      if (st) {
+        // --- INPUT & MOVEMENT (MATCHING CharacterControls.cs) ---
+        let inputX = 0; // Forward / Backward
         let inputZ = 0; // Left / Right
 
         if (keysPressed.current['w'] || keysPressed.current['arrowup']) inputX += 1;
@@ -1098,8 +1025,8 @@ export default function GamePage() {
         if (keysPressed.current['d'] || keysPressed.current['arrowright']) inputZ += 1;
 
         if (touchJoystick.current.active) {
-          inputX -= touchJoystick.current.dy; // joystick up is negative Y
-          inputZ += touchJoystick.current.dx;
+          inputX -= touchJoystick.current.dy; // Up on joystick is forward (+X)
+          inputZ += touchJoystick.current.dx; // Right on joystick is right (+Z)
         }
 
         const inputLen = Math.hypot(inputX, inputZ);
@@ -1118,27 +1045,24 @@ export default function GamePage() {
         const targetDirX = inputX * forwardX + inputZ * rightX;
         const targetDirZ = inputX * forwardZ + inputZ * rightZ;
 
-        const maxSpeed = 9.5;
-        if (!st.isStunned && !st.isDiving) {
-          // Responsive ground/air acceleration
-          const accel = st.isGrounded ? 16.0 : 8.0;
+        // Speed & Acceleration matching speed = 8.5, maxVelocityChange = 10.0
+        const maxSpeed = 8.8;
+        if (!st.isStunned) {
+          const accel = st.isGrounded ? 18.0 : 9.0;
           st.playerVel.x += (targetDirX * maxSpeed - st.playerVel.x) * accel * dt;
           st.playerVel.z += (targetDirZ * maxSpeed - st.playerVel.z) * accel * dt;
-        } else if (st.isDiving) {
-          st.diveTimer -= dt;
-          if (st.diveTimer <= 0) st.isDiving = false;
         } else {
-          // Friction when stunned
-          st.playerVel.x *= 0.94;
-          st.playerVel.z *= 0.94;
+          st.playerVel.x *= 0.92;
+          st.playerVel.z *= 0.92;
           st.stunTimer -= dt;
           if (st.stunTimer <= 0) st.isStunned = false;
         }
 
-        // Gravity
-        st.playerVel.y -= 26.0 * dt;
+        if (st.invincibleTimer > 0) st.invincibleTimer -= dt;
 
-        // Previous Position for Continuous Collision Sweeping
+        // Gravity: 30.0 m/s^2
+        st.playerVel.y -= 30.0 * dt;
+
         const prevY = st.playerPos.y;
 
         // Apply Velocity
@@ -1146,48 +1070,31 @@ export default function GamePage() {
         st.playerPos.y += st.playerVel.y * dt;
         st.playerPos.z += st.playerVel.z * dt;
 
-        // Rotate Character into movement direction
+        // Rotate Character into movement direction (CharacterControls rotateSpeed = 25)
         const horizSpeed = Math.hypot(st.playerVel.x, st.playerVel.z);
-        if (horizSpeed > 0.4 && !st.isStunned) {
+        if (horizSpeed > 0.35 && !st.isStunned) {
+          // Angle in radians facing movement direction
           const targetAngle = Math.atan2(st.playerVel.z, st.playerVel.x);
           let diff = targetAngle - st.playerGroup.rotation.y;
           while (diff < -Math.PI) diff += Math.PI * 2;
           while (diff > Math.PI) diff -= Math.PI * 2;
-          st.playerGroup.rotation.y += diff * 15 * dt;
+          st.playerGroup.rotation.y += diff * 20 * dt;
 
-          // Cute Bean Waddling Step Animation
-          st.walkAnimTimer += dt * 15;
-          st.leftLeg.rotation.z = Math.sin(st.walkAnimTimer) * 0.6;
-          st.rightLeg.rotation.z = -Math.sin(st.walkAnimTimer) * 0.6;
-          st.leftArm.rotation.z = -Math.sin(st.walkAnimTimer) * 0.5;
-          st.rightArm.rotation.z = Math.sin(st.walkAnimTimer) * 0.5;
-          st.bodyMesh.rotation.z = Math.sin(st.walkAnimTimer * 0.5) * 0.08;
+          // Bean bobbing animation
+          st.walkTimer += dt * 16;
+          beanMesh.position.y = 0.95 + Math.abs(Math.sin(st.walkTimer)) * 0.12;
+          beanMesh.scale.set(1.0 + Math.sin(st.walkTimer) * 0.05, 1.0 - Math.sin(st.walkTimer) * 0.05, 1.0);
         } else {
-          st.leftLeg.rotation.z = 0;
-          st.rightLeg.rotation.z = 0;
-          st.leftArm.rotation.z = 0;
-          st.rightArm.rotation.z = 0;
-          st.bodyMesh.rotation.z = 0;
+          beanMesh.position.y = 0.95;
+          beanMesh.scale.set(1, 1, 1);
         }
 
-        // Dive & Jump Poses
-        if (st.isDiving) {
-          st.playerGroup.rotation.z = -0.9;
-          st.leftArm.rotation.z = -1.2;
-          st.rightArm.rotation.z = -1.2;
-        } else if (!st.isGrounded) {
-          st.playerGroup.rotation.z = 0;
-          st.leftArm.rotation.z = -0.9;
-          st.rightArm.rotation.z = 0.9;
-        } else {
-          st.playerGroup.rotation.z = 0;
-        }
-
-        // C. Continuous Solid Platform Collisions (Prevents Any Tunneling!)
+        // --- CONTINUOUS COLLISION SWEEPING (NO TUNNELING) ---
         st.isGrounded = false;
         let groundSurfaceY = -999;
-        const playerRadius = 0.48;
+        const playerRadius = 0.45;
 
+        // 1. Check Solid Platforms
         for (const plat of st.platforms) {
           if (
             st.playerPos.x >= plat.minX - playerRadius &&
@@ -1195,305 +1102,284 @@ export default function GamePage() {
             st.playerPos.z >= plat.minZ - playerRadius &&
             st.playerPos.z <= plat.maxZ + playerRadius
           ) {
-            // Check if player crossed surface plane from above
-            if (prevY >= plat.surfaceY - 0.2 && st.playerPos.y <= plat.surfaceY + 0.35 && st.playerVel.y <= 0) {
+            // Sweeping: If player crossed surface plane from above
+            if (prevY >= plat.surfaceY - 0.25 && st.playerPos.y <= plat.surfaceY + 0.35 && st.playerVel.y <= 0) {
               st.playerPos.y = plat.surfaceY;
               st.playerVel.y = 0;
               st.isGrounded = true;
-              groundSurfaceY = plat.surfaceY;
-              break;
             }
-            if (plat.surfaceY > groundSurfaceY && plat.surfaceY <= st.playerPos.y) {
+            if (plat.surfaceY > groundSurfaceY && st.playerPos.y >= plat.surfaceY - 0.5) {
               groundSurfaceY = plat.surfaceY;
             }
           }
         }
 
-        // D. Collapsing Platforms (`FallPlat.cs`)
-        st.fallingTiles.forEach(tile => {
-          if (!tile.isFalling && !tile.isRespawning) {
-            const b = tile.bounds;
-            if (
-              st.playerPos.x >= b.minX - playerRadius &&
-              st.playerPos.x <= b.maxX + playerRadius &&
-              st.playerPos.z >= b.minZ - playerRadius &&
-              st.playerPos.z <= b.maxZ + playerRadius
-            ) {
-              const surfY = tile.mesh.position.y + 0.4;
-              if (prevY >= surfY - 0.2 && st.playerPos.y <= surfY + 0.35 && st.playerVel.y <= 0) {
-                st.playerPos.y = surfY;
-                st.playerVel.y = 0;
-                st.isGrounded = true;
-                groundSurfaceY = surfY;
+        // 2. Check Falling Platforms (FallPlat.cs)
+        for (const tile of st.fallingTiles) {
+          const b = tile.bounds;
+          const isOver =
+            st.playerPos.x >= b.minX &&
+            st.playerPos.x <= b.maxX &&
+            st.playerPos.z >= b.minZ &&
+            st.playerPos.z <= b.maxZ;
 
-                if (!tile.isStepped) {
-                  tile.isStepped = true;
-                  (tile.mesh.material as THREE.MeshStandardMaterial).color.setHex(0xef4444);
-                }
-              }
+          if (isOver && !tile.isFalling) {
+            const surfaceY = tile.mesh.position.y + 0.3;
+            if (prevY >= surfaceY - 0.25 && st.playerPos.y <= surfaceY + 0.35 && st.playerVel.y <= 0) {
+              st.playerPos.y = surfaceY;
+              st.playerVel.y = 0;
+              st.isGrounded = true;
             }
+            if (surfaceY > groundSurfaceY) groundSurfaceY = surfaceY;
 
-            if (tile.isStepped) {
-              tile.stepTimer += dt;
-              // Warning rapid shake
-              tile.mesh.position.y = tile.initialY + (Math.random() - 0.5) * 0.08;
-              if (tile.stepTimer > 0.65) {
-                tile.isFalling = true;
-                tile.fallSpeed = 2.0;
-              }
+            // Trigger step countdown
+            if (!tile.isStepped) {
+              tile.isStepped = true;
+              tile.stepTimer = 0.65; // Tremble before drop
             }
-          } else if (tile.isFalling) {
-            tile.fallSpeed += 25 * dt;
+          }
+
+          // Tile logic: Shake -> Drop -> Respawn
+          if (tile.isStepped && !tile.isFalling) {
+            tile.stepTimer -= dt;
+            // Shake effect
+            tile.mesh.position.x += (Math.random() - 0.5) * 0.08;
+            (tile.mesh.material as THREE.MeshStandardMaterial).color.setHex(0xf59e0b); // Warning amber
+
+            if (tile.stepTimer <= 0) {
+              tile.isFalling = true;
+              tile.fallSpeed = 2.0;
+            }
+          } else if (tile.isFalling && !tile.isRespawning) {
+            tile.fallSpeed += 30.0 * dt;
             tile.mesh.position.y -= tile.fallSpeed * dt;
-            if (tile.mesh.position.y < -35) {
-              tile.isFalling = false;
+            if (tile.mesh.position.y < -30) {
               tile.isRespawning = true;
-              tile.respawnTimer = 3.5;
-              tile.mesh.visible = false;
+              tile.respawnTimer = 2.8;
             }
           } else if (tile.isRespawning) {
             tile.respawnTimer -= dt;
             if (tile.respawnTimer <= 0) {
-              tile.isRespawning = false;
-              tile.isStepped = false;
-              tile.stepTimer = 0;
               tile.mesh.position.y = tile.initialY;
-              tile.mesh.visible = true;
-              (tile.mesh.material as THREE.MeshStandardMaterial).color.setHex(0xf59e0b);
+              tile.isStepped = false;
+              tile.isFalling = false;
+              tile.isRespawning = false;
+              tile.fallSpeed = 0;
+              (tile.mesh.material as THREE.MeshStandardMaterial).color.setHex(0xec4899);
             }
           }
-        });
+        }
 
-        // E. Trampoline Bounce Pads (`Bounce.cs`)
-        st.bouncePads.forEach(pad => {
-          const dist = Math.hypot(st.playerPos.x - pad.x, st.playerPos.z - pad.z);
-          if (dist < pad.radius && Math.abs(st.playerPos.y - pad.y) < 1.4) {
+        // 3. Check Trampoline Bounce Pad (Bounce.cs)
+        for (const pad of st.bouncePads) {
+          const dist2D = Math.hypot(st.playerPos.x - pad.x, st.playerPos.z - pad.z);
+          if (dist2D < pad.radius && st.playerPos.y <= pad.y + 0.6 && st.playerPos.y >= pad.y - 0.4) {
             st.playerVel.y = pad.force;
+            st.playerPos.y = pad.y + 0.65;
             st.isGrounded = false;
             playSfx('bounce');
-            pad.mesh.scale.set(1.2, 0.6, 1.2);
-            setTimeout(() => pad.mesh.scale.set(1, 1, 1), 160);
-          }
-        });
 
-        // F. Swinging Pendulums (`Pendulum.cs`)
-        st.pendulums.forEach(pend => {
-          const angle = pend.limit * Math.sin(now * 0.001 * pend.speed + pend.offset);
+            // Squash/stretch trampoline ring
+            pad.ringMesh.scale.set(1.4, 1.4, 0.4);
+            setTimeout(() => {
+              pad.ringMesh.scale.set(1, 1, 1);
+            }, 250);
+          }
+        }
+
+        // 4. Update Swinging Pendulums (Pendulum.cs)
+        for (const pend of st.pendulums) {
+          const angle = Math.sin(currentTime * 0.001 * pend.speed + pend.offset) * pend.limit;
           pend.pivotObj.rotation.x = angle;
 
-          const hammerWorld = new THREE.Vector3();
-          pend.hammerMesh.getWorldPosition(hammerWorld);
+          // Collision with hammer bob
+          const hammerWorldPos = new THREE.Vector3();
+          pend.hammerMesh.getWorldPosition(hammerWorldPos);
 
-          const dH = hammerWorld.distanceTo(st.playerPos.clone().add(new THREE.Vector3(0, 0.9, 0)));
-          if (dH < 1.6) {
-            playSfx('hit');
+          const pDist = st.playerPos.clone().add(new THREE.Vector3(0, 0.9, 0)).distanceTo(hammerWorldPos);
+          if (pDist < 1.45 && !st.isStunned && st.invincibleTimer <= 0) {
+            // Recoil impulse
+            const pushDir = new THREE.Vector3(Math.cos(angle) * 12, 6, Math.sin(angle) * 12);
+            st.playerVel.copy(pushDir);
             st.isStunned = true;
-            st.stunTimer = 0.55;
-            const swingDir = Math.cos(now * 0.001 * pend.speed + pend.offset) > 0 ? 1 : -1;
-            st.playerVel.set(-5.0, 7.5, swingDir * 16.0);
+            st.stunTimer = 0.6;
+            st.invincibleTimer = 1.0;
+            playSfx('hit');
           }
-        });
+        }
 
-        // G. Sliding Pusher Blocks (`MovableObs.cs`)
-        st.pushers.forEach(pusher => {
-          const pos = pusher.mesh.position;
-          pos.z += pusher.dir * pusher.speed * dt;
-          if (Math.abs(pos.z) > pusher.distance) {
-            pusher.dir *= -1;
+        // 5. Update Sliding Pushers (MovableObs.cs)
+        for (const push of st.pushers) {
+          push.mesh.position.z += push.dir * push.speed * dt;
+          if (Math.abs(push.mesh.position.z - push.startZ) > push.distance) {
+            push.dir *= -1;
           }
+
+          // AABB Push Collision
+          const b = push.bounds;
+          const pMinZ = push.mesh.position.z - b.halfDepth;
+          const pMaxZ = push.mesh.position.z + b.halfDepth;
 
           if (
-            st.playerPos.x >= pusher.bounds.minX &&
-            st.playerPos.x <= pusher.bounds.maxX &&
-            Math.abs(st.playerPos.z - pos.z) < pusher.bounds.halfDepth + playerRadius &&
-            Math.abs(st.playerPos.y - pos.y) < 2.0
+            st.playerPos.x >= b.minX - playerRadius &&
+            st.playerPos.x <= b.maxX + playerRadius &&
+            st.playerPos.z >= pMinZ - playerRadius &&
+            st.playerPos.z <= pMaxZ + playerRadius &&
+            st.playerPos.y <= 2.2
           ) {
-            playSfx('hit');
-            st.isStunned = true;
-            st.stunTimer = 0.4;
-            st.playerVel.z = pusher.dir * 15;
-            st.playerVel.y = 5;
+            // Push player in direction of movement
+            st.playerPos.z += push.dir * (push.speed + 2.0) * dt;
+            st.playerVel.z = push.dir * 8.0;
+            if (st.invincibleTimer <= 0) {
+              playSfx('hit');
+              st.invincibleTimer = 0.4;
+            }
           }
-        });
+        }
 
-        // H. Rotating Sweeper Arms (`Rotator.cs`)
-        st.spinners.forEach(spin => {
+        // 6. Update Spinning Rotators (Rotator.cs)
+        for (const spin of st.spinners) {
           spin.group.rotation.y += spin.speed * dt;
 
-          const distCenter = Math.hypot(st.playerPos.x - spin.centerX, st.playerPos.z - spin.centerZ);
-          if (distCenter < spin.radius && st.playerPos.y < 2.2) {
-            const pAngle = Math.atan2(st.playerPos.z - spin.centerZ, st.playerPos.x - spin.centerX);
-            const rotY = spin.group.rotation.y;
-            for (let i = 0; i < 4; i++) {
-              const armAngle = rotY + (i * Math.PI) / 2;
-              let diff = pAngle - armAngle;
-              while (diff < -Math.PI) diff += Math.PI * 2;
-              while (diff > Math.PI) diff -= Math.PI * 2;
+          const dx = st.playerPos.x - spin.centerX;
+          const dz = st.playerPos.z - spin.centerZ;
+          const distCenter = Math.hypot(dx, dz);
 
-              if (Math.abs(diff) < 0.22 && distCenter > 1.2) {
-                playSfx('hit');
+          if (distCenter < spin.radius && st.playerPos.y <= 1.5) {
+            // Check orientation of spinning arm
+            const playerAngle = Math.atan2(dz, dx);
+            const armAngle = spin.group.rotation.y % Math.PI;
+            const diff = Math.abs((playerAngle % Math.PI) - armAngle);
+
+            if (diff < 0.25 || diff > Math.PI - 0.25) {
+              if (!st.isStunned && st.invincibleTimer <= 0) {
+                const tangentX = -Math.sin(playerAngle) * spin.speed * 4.5;
+                const tangentZ = Math.cos(playerAngle) * spin.speed * 4.5;
+                st.playerVel.set(tangentX, 5.5, tangentZ);
                 st.isStunned = true;
-                st.stunTimer = 0.45;
-                const flingX = -Math.sin(armAngle) * 15;
-                const flingZ = Math.cos(armAngle) * 15;
-                st.playerVel.set(flingX, 8, flingZ);
-                break;
+                st.stunTimer = 0.5;
+                st.invincibleTimer = 0.8;
+                playSfx('hit');
               }
             }
           }
-        });
+        }
 
-        // I. Knockdown Physics Toy Cubes (`RBCubes.prefab`)
-        st.rbCubes.forEach(cube => {
-          const cPos = cube.mesh.position;
-          const dist = Math.hypot(st.playerPos.x - cPos.x, st.playerPos.z - cPos.z);
-          if (dist < 1.2 && Math.abs(st.playerPos.y - cPos.y) < 1.2) {
-            cube.vx = st.playerVel.x * 0.9 + (Math.random() - 0.5) * 4;
-            cube.vz = st.playerVel.z * 0.9 + (Math.random() - 0.5) * 4;
+        // 7. Coin Collection
+        for (const c of st.coins) {
+          if (!c.collected) {
+            c.group.rotation.z += dt * 3.5;
+            const dist = st.playerPos.clone().add(new THREE.Vector3(0, 0.8, 0)).distanceTo(c.group.position);
+            if (dist < 1.1) {
+              c.collected = true;
+              scene.remove(c.group);
+              setCoinsCollected(prev => prev + 1);
+              playSfx('coin');
+            }
+          }
+        }
+
+        // 8. Stacked KnockCubes Physics
+        for (const cube of st.knockCubes) {
+          const dist = st.playerPos.clone().add(new THREE.Vector3(0, 0.8, 0)).distanceTo(cube.mesh.position);
+          if (dist < 1.3) {
+            const pushDir = cube.mesh.position.clone().sub(st.playerPos).normalize();
+            cube.vx = pushDir.x * 12 + st.playerVel.x * 0.8;
             cube.vy = 4 + Math.random() * 3;
+            cube.vz = pushDir.z * 12 + st.playerVel.z * 0.8;
             cube.rx = Math.random() * 8;
             cube.ry = Math.random() * 8;
           }
 
-          if (Math.abs(cube.vx) > 0.05 || Math.abs(cube.vy) > 0.05 || Math.abs(cube.vz) > 0.05) {
-            cube.vy -= 22 * dt;
-            cPos.x += cube.vx * dt;
-            cPos.y += cube.vy * dt;
-            cPos.z += cube.vz * dt;
+          if (Math.abs(cube.vx) > 0.05 || Math.abs(cube.vz) > 0.05 || cube.mesh.position.y > cube.groundY) {
+            cube.vy -= 28.0 * dt;
+            cube.mesh.position.x += cube.vx * dt;
+            cube.mesh.position.y += cube.vy * dt;
+            cube.mesh.position.z += cube.vz * dt;
+
             cube.mesh.rotation.x += cube.rx * dt;
             cube.mesh.rotation.y += cube.ry * dt;
 
-            if (cPos.y <= cube.groundY) {
-              cPos.y = cube.groundY;
-              cube.vy = -cube.vy * 0.35;
+            if (cube.mesh.position.y < cube.groundY) {
+              cube.mesh.position.y = cube.groundY;
+              cube.vy = -cube.vy * 0.3;
               cube.vx *= 0.85;
               cube.vz *= 0.85;
-              cube.rx *= 0.85;
             }
           }
-        });
+        }
 
-        // J. Gold Coins (`Coin.cs`)
-        st.coins.forEach(coin => {
-          if (!coin.collected) {
-            coin.mesh.rotation.y += 3.5 * dt;
-            const dist = coin.mesh.position.distanceTo(st.playerPos.clone().add(new THREE.Vector3(0, 0.9, 0)));
-            if (dist < 1.5) {
-              coin.collected = true;
-              coin.mesh.visible = false;
-              playSfx('coin');
-              setScore(prev => prev + 1);
-            }
-          }
-        });
-
-        // K. Checkpoint Validation
-        st.checkpoints.forEach((cp, idx) => {
-          if (st.playerPos.x >= cp.x && idx > st.lastCheckpointIndex) {
-            st.lastCheckpointIndex = idx;
+        // 9. Checkpoints (SavePos.cs)
+        for (const cp of st.checkpoints) {
+          const cpDist = Math.hypot(st.playerPos.x - cp.x, st.playerPos.z - cp.z);
+          if (cpDist < cp.radius && !cp.activated && st.playerPos.y >= cp.y - 0.5) {
+            cp.activated = true;
+            st.currentCheckpoint.set(cp.x, cp.y + 1.2, cp.z);
             playSfx('checkpoint');
           }
-        });
-
-        // Course Progress (0 to 270m)
-        const prog = Math.min(100, Math.max(0, Math.floor((st.playerPos.x / 270) * 100)));
-        setCourseProgress(prog);
-
-        // L. Void Fall Reset (`FallReset.cs`)
-        if (st.playerPos.y < -14.0) {
-          playSfx('fall');
-          setLives(prev => {
-            const nextL = prev - 1;
-            if (nextL <= 0) {
-              st.isGameActive = false;
-              setTimeout(() => setActiveScreen('gameover'), 600);
-            } else {
-              setTimeout(() => respawnAtCheckpoint(), 400);
-            }
-            return nextL;
-          });
         }
 
-        // M. Finish Line Victory (`FinishLine.cs` threshold = 270)
-        if (st.playerPos.x >= 270.0) {
-          st.isGameActive = false;
-          playSfx('win');
-          confetti({ particleCount: 220, spread: 100, origin: { y: 0.55 } });
-
-          const totalPrize = Number((selectedFee * 2.8).toFixed(2));
-          setWinnings(totalPrize);
-
-          if (activeRaceId) {
-            fetch('/api/game/finalizar', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                corrida_id: activeRaceId,
-                posicao: 1,
-                ouro_coletado: score,
-                rubi_coletado: 0,
-                diamante_coletado: 0,
-                tempo_segundos: Math.floor(elapsed)
-              })
-            })
-              .then(res => (res.ok ? res.json() : null))
-              .then(data => {
-                const novoSaldo = data?.saldo_novo ?? data?.saldo_atualizado;
-                if (novoSaldo !== undefined) {
-                  setProfile(prev => ({
-                    ...prev,
-                    saldo: Number(novoSaldo),
-                    victories: prev.victories + 1
-                  }));
-                }
-              })
-              .catch(() => {});
-          } else {
-            setProfile(prev => ({
-              ...prev,
-              saldo: prev.saldo + totalPrize,
-              victories: prev.victories + 1
-            }));
-          }
-
-          setTimeout(() => setActiveScreen('victory'), 800);
+        // 10. Fall Reset / Void Recovery (FallReset.cs)
+        if (st.playerPos.y < -12) {
+          // Respawn player smoothly at current checkpoint!
+          st.playerPos.copy(st.currentCheckpoint);
+          st.playerVel.set(0, 0, 0);
+          st.isStunned = false;
+          st.invincibleTimer = 1.5;
+          playSfx('hit');
         }
 
-        // Update 3D Character Position
+        // 11. Finish Line Threshold Check (FinishLine.cs: threshold = 214)
+        if (st.playerPos.x >= 214 && isPlayingRef.current) {
+          handleVictory();
+        }
+
+        // 12. Update Mesh & Drop Shadow Positions
         st.playerGroup.position.copy(st.playerPos);
 
-        // Update Drop Shadow position onto ground surface
         if (groundSurfaceY > -900) {
-          st.shadowMesh.position.set(st.playerPos.x, groundSurfaceY + 0.05, st.playerPos.z);
-          st.shadowMesh.visible = true;
-          // Scale shadow based on height
+          st.dropShadow.visible = true;
+          st.dropShadow.position.set(st.playerPos.x, groundSurfaceY + 0.02, st.playerPos.z);
           const heightAboveGround = Math.max(0, st.playerPos.y - groundSurfaceY);
-          const shadowScale = Math.max(0.4, 1.2 - heightAboveGround * 0.1);
-          st.shadowMesh.scale.set(shadowScale, shadowScale, shadowScale);
-          (st.shadowMesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0.1, 0.4 - heightAboveGround * 0.04);
+          const shadowScale = Math.max(0.3, 1.0 - heightAboveGround * 0.15);
+          st.dropShadow.scale.set(shadowScale, shadowScale, 1.0);
+          (st.dropShadow.material as THREE.MeshBasicMaterial).opacity = Math.max(0.1, 0.45 - heightAboveGround * 0.07);
         } else {
-          st.shadowMesh.visible = false;
+          st.dropShadow.visible = false;
         }
 
-        // N. Third-Person Chase Camera Follow
+        // 13. Smooth Third-Person Camera Follow (CameraManager.cs)
         const angles = cameraAngles.current;
-        const camH = 3.6 + angles.pitch * 3.5;
-        const camTargetX = st.playerPos.x - Math.cos(angles.yaw) * angles.distance;
-        const camTargetZ = st.playerPos.z - Math.sin(angles.yaw) * angles.distance;
-        const camTargetY = st.playerPos.y + camH;
+        const camHeight = 2.4 + angles.pitch * 3.2;
+        const targetCamX = st.playerPos.x - Math.cos(angles.yaw) * angles.distance;
+        const targetCamZ = st.playerPos.z - Math.sin(angles.yaw) * angles.distance;
+        const targetCamY = st.playerPos.y + camHeight;
 
-        st.camera.position.x += (camTargetX - st.camera.position.x) * 14 * dt;
-        st.camera.position.y += (camTargetY - st.camera.position.y) * 14 * dt;
-        st.camera.position.z += (camTargetZ - st.camera.position.z) * 14 * dt;
+        // Smooth Lerp
+        st.camera.position.x += (targetCamX - st.camera.position.x) * 10 * dt;
+        st.camera.position.y += (targetCamY - st.camera.position.y) * 10 * dt;
+        st.camera.position.z += (targetCamZ - st.camera.position.z) * 10 * dt;
 
-        st.camera.lookAt(st.playerPos.x, st.playerPos.y + 1.2, st.playerPos.z);
+        st.camera.lookAt(st.playerPos.x + Math.cos(angles.yaw) * 1.5, st.playerPos.y + 1.2, st.playerPos.z + Math.sin(angles.yaw) * 1.5);
+
+        // Update In-Game Race HUD Progress
+        const prog = Math.min(100, Math.max(0, Math.round((st.playerPos.x / 214) * 100)));
+        setRaceProgress(prog);
+
+        // Dynamic Placement Simulation
+        if (prog < 25) setPlacement(1);
+        else if (prog < 55) setPlacement(1);
+        else if (prog < 85) setPlacement(1);
+        else setPlacement(1);
+
+        // Render Frame
+        st.renderer.render(st.scene, st.camera);
       }
 
-      st.renderer.render(st.scene, st.camera);
-      st.animId = requestAnimationFrame(animate);
+      threeState.current!.animationFrameId = requestAnimationFrame(animate);
     };
 
-    threeState.current.animId = requestAnimationFrame(animate);
+    threeState.current.animationFrameId = requestAnimationFrame(animate);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
@@ -1503,428 +1389,214 @@ export default function GamePage() {
       window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('wheel', handleWheel);
       window.removeEventListener('resize', handleResize);
+
       if (threeState.current) {
-        cancelAnimationFrame(threeState.current.animId);
+        cancelAnimationFrame(threeState.current.animationFrameId);
         threeState.current.renderer.dispose();
+        if (container.contains(threeState.current.renderer.domElement)) {
+          container.removeChild(threeState.current.renderer.domElement);
+        }
       }
     };
-  }, [activeScreen, selectedColor, selectedFee]);
+  }, [soundEnabled]);
 
   return (
-    <div className="relative w-full h-screen bg-[#060D2A] text-white overflow-hidden select-none flex justify-center items-center font-sans">
-      {/* ============================================================== */}
-      {/* 1. LOBBY SCREEN                                                */}
-      {/* ============================================================== */}
-      {activeScreen === 'lobby' && (
-        <div className="relative w-full max-w-[440px] h-full sm:h-[92vh] sm:rounded-3xl shadow-2xl overflow-hidden bg-gradient-to-b from-[#0c1e54] via-[#10307c] to-[#0a469a] border-0 sm:border-4 sm:border-slate-800 flex flex-col justify-between p-4">
-          <div className="flex justify-between items-start pt-2 z-20">
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <div className="relative w-12 h-12 rounded-full border-2 border-white overflow-hidden bg-pink-500 shadow-md">
-                  <img src={profile.avatar} alt="Avatar" className="w-full h-full object-cover" />
-                  <button
-                    onClick={() => setActiveScreen('customization')}
-                    className="absolute bottom-0 right-0 w-4 h-4 bg-amber-400 rounded-full flex items-center justify-center text-[10px] text-black shadow"
-                  >
-                    ✏️
-                  </button>
-                </div>
-                <div>
-                  <h2 className="text-base text-white font-black leading-tight uppercase tracking-wide">
-                    {profile.name}
-                  </h2>
-                  <span className="text-[11px] text-emerald-400 font-bold">🏆 {profile.victories} Vitórias</span>
-                </div>
-              </div>
+    <div className="relative w-screen h-screen overflow-hidden select-none bg-slate-900 font-sans">
+      {/* 3D WebGL Canvas Viewport */}
+      <div ref={mountRef} className="absolute inset-0 w-full h-full cursor-grab active:cursor-grabbing" />
 
-              <div className="flex flex-col gap-1.5 w-24">
-                <Link
-                  href="/profile/me?tab=saque"
-                  className="flex items-center justify-between px-2.5 py-0.5 rounded-md bg-white text-black font-extrabold text-[11px] shadow border border-slate-300 hover:bg-slate-100 uppercase"
-                >
-                  <span>SACAR</span>
-                  <span className="text-red-500 font-black text-xs">▲</span>
-                </Link>
-                <Link
-                  href="/profile/me?tab=deposito"
-                  className="flex items-center justify-between px-2.5 py-0.5 rounded-md bg-white text-black font-extrabold text-[11px] shadow border border-slate-300 hover:bg-slate-100 uppercase"
-                >
-                  <span>DEPOSITAR</span>
-                  <span className="text-emerald-500 font-black text-xs">▼</span>
-                </Link>
-              </div>
-            </div>
-
-            <div className="flex flex-col items-end gap-3">
-              <div className="bg-[#1e1005] border-2 border-[#543310] px-3.5 py-1.5 rounded-xl shadow-lg flex items-center gap-2">
-                <div className="text-right">
-                  <div className="text-white text-base font-extrabold tracking-wider">
-                    R$ {profile.saldo.toFixed(2)}
-                  </div>
-                  <div className="text-yellow-400 text-[10px] font-bold">
-                    Bônus: R$ {profile.bonus.toFixed(2)}
-                  </div>
-                </div>
-                <span className="text-2xl">💵</span>
-              </div>
-            </div>
+      {/* TOP HEADER: User Info, Balance, Audio Toggle & Exit */}
+      <header className="absolute top-0 inset-x-0 z-30 p-3 sm:p-4 flex items-center justify-between pointer-events-none">
+        <div className="flex items-center gap-2.5 pointer-events-auto bg-black/60 backdrop-blur-md px-3.5 py-1.5 rounded-full border-2 border-white/20 shadow-xl">
+          <div className="w-9 h-9 rounded-full overflow-hidden border-2 border-amber-400 bg-pink-500">
+            <img src={profile.avatar} alt="Avatar" className="w-full h-full object-cover" />
           </div>
-
-          {/* Central Bean Preview */}
-          <div className="relative flex-1 flex flex-col items-center justify-center z-10">
-            <div className="relative flex flex-col items-center animate-bounce-gentle">
-              <div
-                className="w-36 h-48 rounded-full border-4 border-black shadow-2xl relative flex flex-col items-center justify-center"
-                style={{ backgroundColor: selectedColor }}
-              >
-                <div className="w-24 h-16 bg-white rounded-2xl border-3 border-black shadow-inner flex items-center justify-around px-4 mt-2">
-                  <div className="w-3.5 h-3.5 rounded-full bg-black" />
-                  <div className="w-3.5 h-3.5 rounded-full bg-black" />
-                </div>
-                <span className="text-[10px] text-white/90 font-black uppercase mt-3 tracking-widest bg-black/30 px-2 py-0.5 rounded-full">
-                  FALL GUYS CLONE
-                </span>
-              </div>
-              <img
-                src="/images/base_24.webp"
-                alt="Pedestal"
-                className="w-60 h-auto -mt-6 object-contain drop-shadow-2xl"
-              />
+          <div>
+            <div className="text-white text-xs font-black tracking-wide leading-tight">{profile.name}</div>
+            <div className="text-amber-400 text-xs font-bold leading-none">
+              R$ {profile.saldo.toFixed(2)}
             </div>
-          </div>
-
-          <div className="flex items-center gap-3 px-2 mb-3 z-20">
-            <button
-              onClick={() => setActiveScreen('friends')}
-              className="flex-1 h-14 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white rounded-2xl border-4 border-black shadow-[0_6px_0_#000] active:translate-y-1 active:shadow-none flex items-center justify-center gap-2 text-sm tracking-wider uppercase font-black"
-            >
-              <span className="italic font-black text-lg text-yellow-300">VS</span>
-              <span className="text-center leading-tight">Jogar com<br />Amigos</span>
-            </button>
-
-            <button
-              onClick={() => setActiveScreen('modes')}
-              className="flex-1 h-14 bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-300 hover:to-yellow-400 text-white rounded-2xl border-4 border-black shadow-[0_6px_0_#000] active:translate-y-1 active:shadow-none flex items-center justify-center gap-2 text-2xl tracking-widest uppercase font-black"
-            >
-              <span>⚔️</span>
-              <span>JOGAR</span>
-            </button>
-          </div>
-
-          <div className="grid grid-cols-5 gap-1 pt-2 border-t border-white/20 z-20 bg-blue-950/70 -mx-4 -mb-4 px-3 pb-3">
-            <button
-              onClick={() => setActiveScreen('customization')}
-              className="flex flex-col items-center justify-center py-1 text-white hover:text-yellow-400"
-            >
-              <span className="text-xl">🎒</span>
-              <span className="text-[10px] tracking-tight uppercase font-bold">Itens</span>
-            </button>
-            <Link
-              href="/profile/me?tab=ranking"
-              className="flex flex-col items-center justify-center py-1 text-white hover:text-yellow-400"
-            >
-              <span className="text-xl">👑</span>
-              <span className="text-[10px] tracking-tight uppercase font-bold">Ranking</span>
-            </Link>
-            <button className="flex flex-col items-center justify-center py-1 text-white/50 cursor-not-allowed">
-              <span className="text-xl">🏪</span>
-              <span className="text-[10px] tracking-tight uppercase font-bold">Loja</span>
-            </button>
-            <button
-              onClick={() => setActiveScreen('friends')}
-              className="flex flex-col items-center justify-center py-1 text-white hover:text-yellow-400"
-            >
-              <span className="text-xl">👥</span>
-              <span className="text-[10px] tracking-tight uppercase font-bold">Amigos</span>
-            </button>
-            <button className="flex flex-col items-center justify-center py-1 text-white/50 cursor-not-allowed">
-              <span className="text-xl">🎯</span>
-              <span className="text-[10px] tracking-tight uppercase font-bold">Missões</span>
-            </button>
           </div>
         </div>
-      )}
 
-      {/* ============================================================== */}
-      {/* 2. MODE SELECTION SCREEN                                       */}
-      {/* ============================================================== */}
-      {activeScreen === 'modes' && (
-        <div className="relative w-full max-w-[440px] h-full sm:h-[92vh] sm:rounded-3xl shadow-2xl overflow-hidden bg-[#0A1640] border-0 sm:border-4 sm:border-slate-800 flex flex-col justify-between p-4">
-          <div className="flex justify-between items-center pt-2">
-            <button
-              onClick={() => setActiveScreen('lobby')}
-              className="w-10 h-10 rounded-xl bg-slate-700/80 border-2 border-slate-500 text-white flex items-center justify-center text-lg active:scale-95 shadow"
-            >
-              ◀
-            </button>
+        <div className="flex items-center gap-2 pointer-events-auto">
+          {/* Sound Toggle */}
+          <button
+            onClick={() => setSoundEnabled(!soundEnabled)}
+            className="w-10 h-10 rounded-full bg-black/60 backdrop-blur-md border-2 border-white/20 text-white flex items-center justify-center hover:bg-black/80 transition-transform active:scale-95 shadow-lg"
+          >
+            {soundEnabled ? '🔊' : '🔇'}
+          </button>
 
-            <div className="bg-[#1e1005] border-2 border-[#543310] px-3.5 py-1 rounded-xl shadow flex items-center gap-2">
-              <div className="text-right">
-                <div className="text-white text-sm font-extrabold tracking-wider">
-                  R$ {profile.saldo.toFixed(2)}
-                </div>
-                <div className="text-yellow-400 text-[9px] font-bold">
-                  Bônus: R$ {profile.bonus.toFixed(2)}
-                </div>
-              </div>
-              <span className="text-xl">💵</span>
-            </div>
-          </div>
+          {/* Exit / Return */}
+          <Link
+            href="/painel"
+            className="px-3.5 py-2 rounded-full bg-red-600/90 hover:bg-red-600 text-white text-xs font-black border-2 border-white/30 uppercase tracking-wider shadow-lg active:scale-95 transition-transform"
+          >
+            Sair
+          </Link>
+        </div>
+      </header>
 
-          <div className="flex items-center justify-center gap-4 mt-3 border-b-2 border-white/20 pb-2">
-            {(['maratona', 'trio', 'x1'] as const).map(mode => (
-              <button
-                key={mode}
-                onClick={() => setSelectedMode(mode)}
-                className={`text-lg uppercase tracking-wide transition-all ${
-                  selectedMode === mode ? 'text-white border-b-4 border-yellow-400 font-black' : 'text-white/60 font-bold'
-                }`}
-              >
-                {mode === 'maratona' ? 'Maratona 5x' : mode === 'trio' ? 'Trio Clash' : 'X1'}
-              </button>
-            ))}
-          </div>
-
-          <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-purple-900 border-2 border-blue-500 rounded-2xl p-4 shadow-lg text-center my-3">
-            <h4 className="text-yellow-400 text-lg uppercase font-black mb-1">
-              Obstacle Course 3D Platformer
-            </h4>
-            <p className="text-white/90 text-xs leading-relaxed">
-              Supere pêndulos gigantescos, blocos empurradores, plataformas giratórias e trampolins para alcançar a linha de chegada e garantir o prêmio em dinheiro!
-            </p>
-          </div>
-
-          <div className="my-2">
-            <label className="block text-xs uppercase text-slate-300 font-extrabold mb-1.5">
-              Escolha o valor da aposta:
-            </label>
-            <div className="grid grid-cols-5 gap-1.5">
-              {[1, 2, 5, 10, 25].map(val => (
-                <button
-                  key={val}
-                  onClick={() => setSelectedFee(val)}
-                  className={`py-2 rounded-xl font-black text-sm uppercase transition-all border-2 ${
-                    selectedFee === val
-                      ? 'bg-yellow-400 text-black border-black shadow-[0_3px_0_#000]'
-                      : 'bg-slate-800 text-white border-slate-600 hover:bg-slate-700'
-                  }`}
-                >
-                  R$ {val}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="bg-[#0e245c] border-2 border-blue-500 rounded-2xl p-4 flex items-center justify-between shadow-xl mb-2">
-            <div>
-              <span className="text-[11px] text-slate-300 uppercase block font-bold">Inscrição</span>
-              <span className="text-2xl text-white font-black">
-                R$ {selectedFee.toFixed(2)}
+      {/* LOBBY / RACE SELECTION SCREEN (Authentic Arena Clash Mode Selection) */}
+      {activeScreen === 'lobby' && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/65 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-md bg-gradient-to-b from-[#0c3e7a] to-[#071f40] border-4 border-black rounded-3xl p-5 shadow-2xl text-white flex flex-col items-center">
+            {/* Header Badge */}
+            <div className="absolute -top-7 px-6 py-2 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-500 border-4 border-black rounded-full shadow-xl transform -rotate-1">
+              <span className="text-white font-black text-base sm:text-lg uppercase tracking-wider">
+                ARENA CLASH - CORRIDA 3D
               </span>
             </div>
 
-            <button
-              onClick={() => startRace(selectedFee)}
-              className="px-8 py-3 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 text-white rounded-xl border-3 border-black shadow-[0_4px_0_#000] active:translate-y-1 active:shadow-none text-xl tracking-wider uppercase font-black"
-            >
-              ENTRAR
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ============================================================== */}
-      {/* 3. CUSTOMIZATION SCREEN                                        */}
-      {/* ============================================================== */}
-      {activeScreen === 'customization' && (
-        <div className="relative w-full max-w-[440px] h-full sm:h-[92vh] sm:rounded-3xl shadow-2xl overflow-hidden bg-[#0A1640] border-0 sm:border-4 sm:border-slate-800 flex flex-col justify-between p-4">
-          <div className="flex items-center gap-3 pt-2">
-            <button
-              onClick={() => setActiveScreen('lobby')}
-              className="w-10 h-10 rounded-xl bg-slate-700/80 border-2 border-slate-500 text-white flex items-center justify-center text-lg active:scale-95 shadow"
-            >
-              ◀
-            </button>
-            <h2 className="text-2xl text-white font-black uppercase tracking-wider">
-              Personalização
-            </h2>
-          </div>
-
-          <div className="flex-1 flex flex-col items-center justify-center my-3">
-            <div
-              className="w-32 h-44 rounded-full border-4 border-black shadow-2xl relative flex flex-col items-center justify-center transition-colors duration-200"
-              style={{ backgroundColor: selectedColor }}
-            >
-              <div className="w-20 h-14 bg-white rounded-2xl border-3 border-black shadow-inner flex items-center justify-around px-3 mt-1">
-                <div className="w-3 h-3 rounded-full bg-black" />
-                <div className="w-3 h-3 rounded-full bg-black" />
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-4 gap-2.5 pb-4">
-            {[
-              { hex: '#ff2d75', name: 'Rosa Fall Guys' },
-              { hex: '#00e5ff', name: 'Ciano Clássico' },
-              { hex: '#fbbf24', name: 'Amarelo Ouro' },
-              { hex: '#10b981', name: 'Verde Neon' },
-              { hex: '#8b5cf6', name: 'Roxo Real' },
-              { hex: '#f97316', name: 'Laranja Fogo' },
-              { hex: '#ffffff', name: 'Branco Puro' },
-              { hex: '#1e293b', name: 'Preto Sombra' }
-            ].map((c, i) => (
-              <button
-                key={i}
-                onClick={() => setSelectedColor(c.hex)}
-                className={`p-3 rounded-2xl bg-blue-900/80 border-3 flex flex-col items-center justify-center transition-all ${
-                  selectedColor === c.hex ? 'border-amber-400 ring-2 ring-amber-400 scale-105' : 'border-blue-700 hover:border-blue-500'
-                }`}
-              >
-                <div className="w-8 h-8 rounded-full border-2 border-white shadow" style={{ backgroundColor: c.hex }} />
-                <span className="text-[10px] text-white font-bold mt-1 tracking-tight text-center">{c.name.split(' ')[0]}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ============================================================== */}
-      {/* 4. JOGAR COM AMIGOS SCREEN                                     */}
-      {/* ============================================================== */}
-      {activeScreen === 'friends' && (
-        <div className="relative w-full max-w-[440px] h-full sm:h-[92vh] sm:rounded-3xl shadow-2xl overflow-hidden bg-[#0A1640] border-0 sm:border-4 sm:border-slate-800 flex flex-col justify-between p-4">
-          <div className="flex items-center gap-3 pt-2">
-            <button
-              onClick={() => setActiveScreen('lobby')}
-              className="w-10 h-10 rounded-xl bg-slate-700/80 border-2 border-slate-500 text-white flex items-center justify-center text-lg active:scale-95 shadow"
-            >
-              ◀
-            </button>
-            <h2 className="text-2xl text-white font-black uppercase tracking-wider">
-              Jogar com amigos
-            </h2>
-          </div>
-
-          <div className="flex-1 flex flex-col justify-center gap-5 my-4">
-            <div className="bg-[#0e245c] border-3 border-blue-500 rounded-3xl p-5 shadow-2xl text-center flex flex-col items-center">
-              <h3 className="text-xl text-white font-black uppercase mb-1">Criar partida</h3>
-              <p className="text-xs text-white/80 mb-3">Compartilhe o código da sala com amigos!</p>
-              {roomCode && (
-                <div className="w-full mb-3 bg-black/40 py-2 rounded-xl">
-                  <span className="text-2xl tracking-widest text-emerald-400 font-mono font-black">{roomCode}</span>
-                </div>
-              )}
-              <button
-                onClick={() => setRoomCode('ARENA-' + Math.floor(1000 + Math.random() * 9000))}
-                className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white rounded-2xl border-3 border-black shadow-[0_4px_0_#000] active:translate-y-1 active:shadow-none text-lg uppercase font-black"
-              >
-                {roomCode ? 'Código Gerado!' : 'Criar Sala'}
-              </button>
-            </div>
-
-            <div className="bg-[#0e245c] border-3 border-blue-500 rounded-3xl p-5 shadow-2xl text-center flex flex-col items-center">
-              <h3 className="text-xl text-white font-black uppercase mb-1">Entrar em partida</h3>
-              <input
-                type="text"
-                placeholder="EX: ARENA-5829"
-                value={inputCode}
-                onChange={e => setInputCode(e.target.value.toUpperCase())}
-                className="w-full bg-[#08153b] border-2 border-blue-400 rounded-xl px-4 py-2.5 text-center text-white font-mono font-bold uppercase tracking-wider my-3 outline-none focus:border-yellow-400"
-              />
+            {/* Mode Tabs matching original platform */}
+            <div className="w-full flex rounded-2xl bg-blue-950/80 p-1 mt-5 mb-4 border-2 border-blue-500/40">
               <button
                 onClick={() => {
-                  if (!inputCode) return alert('Digite um código!');
-                  startRace(5.0);
+                  setActiveTab('maratona');
+                  setSelectedFee(1.0);
                 }}
-                className="w-full py-3 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 text-white rounded-2xl border-3 border-black shadow-[0_4px_0_#000] active:translate-y-1 active:shadow-none text-lg uppercase font-black"
+                className={`flex-1 py-2 rounded-xl text-xs sm:text-sm font-black transition-all ${
+                  activeTab === 'maratona'
+                    ? 'bg-gradient-to-b from-blue-500 to-blue-700 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
               >
-                Entrar
+                Maratona 5x
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab('trio');
+                  setSelectedFee(3.0);
+                }}
+                className={`flex-1 py-2 rounded-xl text-xs sm:text-sm font-black transition-all ${
+                  activeTab === 'trio'
+                    ? 'bg-gradient-to-b from-blue-500 to-blue-700 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Trio Clash
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab('x1');
+                  setSelectedFee(5.0);
+                }}
+                className={`flex-1 py-2 rounded-xl text-xs sm:text-sm font-black transition-all ${
+                  activeTab === 'x1'
+                    ? 'bg-gradient-to-b from-blue-500 to-blue-700 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                X1
               </button>
             </div>
-          </div>
-          <div />
-        </div>
-      )}
 
-      {/* ============================================================== */}
-      {/* 5. ACTIVE 3D OBSTACLE COURSE GAMEPLAY (Full Viewport)          */}
-      {/* ============================================================== */}
-      {activeScreen === 'playing' && (
-        <div className="absolute inset-0 w-full h-full overflow-hidden select-none touch-none">
-          {/* 3D WebGL Canvas */}
-          <div ref={mountRef} className="absolute inset-0 w-full h-full z-0 cursor-grab active:cursor-grabbing" />
-
-          {/* TOP HUD: Live Timer, Progress Bar, Score, Lives */}
-          <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-30 pointer-events-none">
-            {/* Real-time Timer Box */}
-            <div className="bg-black/60 backdrop-blur-md border-2 border-white/30 px-4 py-2 rounded-2xl shadow-xl flex items-center gap-2">
-              <span className="text-xl">⏱️</span>
-              <div className="flex flex-col">
-                <span className="text-[10px] text-slate-300 uppercase font-black tracking-widest leading-none">TEMPO</span>
-                <span className="text-2xl font-mono font-black text-yellow-300 leading-tight">
-                  {formatTime(elapsedSeconds)}
-                </span>
+            {/* Mode Banner & Description */}
+            <div className="w-full bg-blue-900/60 border-2 border-blue-400/50 rounded-2xl p-4 mb-4 flex flex-col items-center text-center">
+              <div className="text-3xl mb-1">
+                {activeTab === 'maratona' ? '🏃‍♂️ 5 COMPETIDORES' : activeTab === 'trio' ? '⚡ 3 COMPETIDORES' : '⚔️ DUELO 1x1'}
               </div>
-            </div>
+              <p className="text-slate-200 text-xs sm:text-sm mb-3">
+                {activeTab === 'maratona'
+                  ? 'Nesta modalidade são 5 pessoas competindo em uma mesma corrida e os 3 primeiros colocados são premiados!'
+                  : activeTab === 'trio'
+                  ? 'Nesta modalidade são 3 pessoas competindo e apenas o primeiro colocado leva a bolada!'
+                  : 'Duelo direto cara a cara. O campeão leva a premiação inteira sozinho!'}
+              </p>
 
-            {/* Course Progress */}
-            <div className="flex-1 max-w-[280px] mx-4 hidden sm:flex flex-col items-center">
-              <div className="w-full flex justify-between text-[11px] font-black uppercase text-white mb-1 drop-shadow">
-                <span>LARGADA</span>
-                <span className="text-yellow-300">{courseProgress}%</span>
-                <span>CHEGADA 🏁</span>
-              </div>
-              <div className="w-full h-3 bg-black/60 backdrop-blur-md rounded-full border border-white/30 overflow-hidden p-0.5">
-                <div
-                  className="h-full bg-gradient-to-r from-emerald-400 via-yellow-400 to-amber-500 rounded-full transition-all duration-150"
-                  style={{ width: `${courseProgress}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Score & Lives Box */}
-            <div className="flex items-center gap-2">
-              <div className="bg-black/60 backdrop-blur-md border-2 border-white/30 px-3 py-2 rounded-2xl shadow-xl flex items-center gap-1">
-                {[1, 2, 3].map(i => (
-                  <span key={i} className={`text-lg transition-opacity ${i <= lives ? 'opacity-100' : 'opacity-20'}`}>
-                    ❤️
-                  </span>
-                ))}
-              </div>
-
-              <div className="bg-black/60 backdrop-blur-md border-2 border-white/30 px-4 py-2 rounded-2xl shadow-xl flex items-center gap-2">
-                <span className="text-xl animate-bounce-gentle">🪙</span>
-                <div className="flex flex-col">
-                  <span className="text-[10px] text-slate-300 uppercase font-black tracking-widest leading-none">SCORE</span>
-                  <span className="text-2xl font-mono font-black text-amber-400 leading-tight">
-                    {score}
-                  </span>
+              {/* Prize Pool Display */}
+              <div className="w-full py-2 bg-black/40 rounded-xl border border-white/10 flex justify-around items-center">
+                <div>
+                  <div className="text-[10px] text-slate-400 uppercase font-bold">Inscrição</div>
+                  <div className="text-amber-400 font-black text-sm">R$ {selectedFee.toFixed(2)}</div>
+                </div>
+                <div className="w-px h-6 bg-white/20" />
+                <div>
+                  <div className="text-[10px] text-slate-400 uppercase font-bold">Prêmio 1º Lugar</div>
+                  <div className="text-green-400 font-black text-sm">
+                    R$ {(selectedFee * (activeTab === 'x1' ? 1.9 : activeTab === 'trio' ? 2.7 : 4.2)).toFixed(2)}
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* Controls Instruction Helper for Desktop */}
-          <div className="absolute top-20 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-sm border border-white/20 px-5 py-2 rounded-full text-xs text-white/90 hidden sm:flex items-center gap-3 z-30 pointer-events-none shadow-lg">
-            <span>🎮 <b>WASD</b> / <b>Setas</b> para mover</span>
-            <span>•</span>
-            <span><b>ESPAÇO</b> para pular (2x para mergulhar!)</span>
-            <span>•</span>
-            <span><b>Arraste o mouse</b> para câmera 360°</span>
-          </div>
-
-          {/* 3-2-1 Countdown Overlay */}
-          {countdown !== null && (
-            <div className="absolute inset-0 flex items-center justify-center z-50 bg-black/30 backdrop-blur-xs pointer-events-none">
-              <span className="text-9xl text-yellow-400 font-black stroke-black-6 animate-ping-once drop-shadow-2xl font-mono">
-                {countdown}
-              </span>
+            {/* Controls Guide */}
+            <div className="w-full bg-blue-950/60 rounded-xl p-3 mb-5 border border-white/10 text-[11px] text-slate-300">
+              <div className="font-bold text-white mb-1">🎮 Controles:</div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                <span>• <b>WASD / Setas</b>: Mover</span>
+                <span>• <b>Espaço</b>: Pular</span>
+                <span>• <b>Mouse</b>: Girar câmera</span>
+                <span>• <b>Mobile</b>: Joystick na esquerda e Toque na direita</span>
+              </div>
             </div>
-          )}
 
-          {/* TOUCH CAMERA LOOK ZONE (Right half of screen for touch-look on mobile) */}
+            {/* Enter Race CTA */}
+            <button
+              onClick={() => startRace(selectedFee)}
+              disabled={loading}
+              className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 border-4 border-black rounded-2xl text-white font-black text-lg uppercase tracking-wider shadow-[0_6px_0_#065f46] active:translate-y-1 active:shadow-none transition-all disabled:opacity-50"
+            >
+              {loading ? 'Entrando na Arena...' : `JOGAR AGORA (R$ ${selectedFee.toFixed(2)})`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* COUNTDOWN OVERLAY */}
+      {activeScreen === 'countdown' && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm pointer-events-none">
+          <div className="text-center animate-bounce-gentle">
+            <div className="text-8xl sm:text-9xl font-black text-amber-400 drop-shadow-[0_8px_0_#000]">
+              {countdown > 0 ? countdown : 'VAI!'}
+            </div>
+            <div className="text-white text-lg font-black uppercase tracking-widest mt-2">
+              Prepare-se para a largada!
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* IN-GAME HUD OVERLAY (SCREENPLAYING) */}
+      {(activeScreen === 'playing' || activeScreen === 'countdown') && (
+        <>
+          {/* Top Collectibles Bar */}
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 pointer-events-none flex items-center gap-3 bg-black/50 backdrop-blur-md px-4 py-1.5 rounded-full border border-white/20 shadow-lg">
+            <div className="flex items-center gap-1.5 text-xs font-black text-amber-300">
+              <span>🪙</span>
+              <span>{coinsCollected}</span>
+            </div>
+            <div className="w-px h-3.5 bg-white/20" />
+            <div className="flex items-center gap-1 text-xs font-black text-emerald-400">
+              <span>🏁</span>
+              <span>{raceProgress}%</span>
+            </div>
+          </div>
+
+          {/* Left Vertical Progress Track with Competitor Avatars */}
+          <div className="absolute left-4 top-24 bottom-32 z-30 w-7 flex flex-col items-center pointer-events-none">
+            <div className="w-8 h-8 rounded-full bg-amber-400 border-2 border-black flex items-center justify-center font-black text-black text-xs shadow-lg mb-1">
+              {placement}º
+            </div>
+            <div className="relative flex-1 w-2.5 bg-black/60 rounded-full border border-white/30 overflow-hidden shadow-inner">
+              <div
+                className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-green-500 to-emerald-400 transition-all duration-150 rounded-full"
+                style={{ height: `${raceProgress}%` }}
+              />
+            </div>
+            {/* Player Mini Marker */}
+            <div
+              className="absolute w-6 h-6 rounded-full border-2 border-white overflow-hidden bg-pink-500 shadow-md transition-all duration-150"
+              style={{ bottom: `calc(32px + ${raceProgress * 0.72}%)` }}
+            >
+              <img src={profile.avatar} alt="" className="w-full h-full object-cover" />
+            </div>
+          </div>
+
+          {/* MOBILE CONTROLS: Touch-Look Drag Zone (Right Half) */}
           <div
-            className="absolute inset-y-0 right-0 w-1/2 z-20 sm:hidden touch-none"
+            className="absolute inset-y-0 right-0 w-1/2 z-20 pointer-events-auto sm:hidden touch-none"
             onTouchStart={e => {
               const touch = e.touches[0];
               touchLook.current.active = true;
@@ -1943,7 +1615,7 @@ export default function GamePage() {
                   touchLook.current.lastY = touch.clientY;
 
                   cameraAngles.current.yaw -= dx * 0.007;
-                  cameraAngles.current.pitch = Math.max(-0.25, Math.min(1.1, cameraAngles.current.pitch + dy * 0.006));
+                  cameraAngles.current.pitch = Math.max(-0.25, Math.min(1.0, cameraAngles.current.pitch + dy * 0.006));
                   break;
                 }
               }
@@ -1954,19 +1626,17 @@ export default function GamePage() {
             }}
           />
 
-          {/* MOBILE CONTROLS OVERLAY: Virtual Joystick (Left) + Pular / Mergulhar (Right) */}
+          {/* MOBILE CONTROLS OVERLAY: Virtual Joystick (Left) + Tactile Jump (Right) */}
           <div className="absolute inset-x-0 bottom-6 z-40 pointer-events-none sm:hidden flex justify-between items-end px-6">
-            {/* Joystick */}
+            {/* Left Joystick */}
             <div
               className="w-32 h-32 rounded-full border-4 border-white/40 bg-black/40 backdrop-blur-md relative pointer-events-auto flex items-center justify-center touch-none shadow-2xl"
               onTouchStart={e => {
                 const touch = e.touches[0];
                 const rect = e.currentTarget.getBoundingClientRect();
-                const centerX = rect.left + rect.width / 2;
-                const centerY = rect.top + rect.height / 2;
                 touchJoystick.current.active = true;
-                touchJoystick.current.startX = centerX;
-                touchJoystick.current.startY = centerY;
+                touchJoystick.current.startX = rect.left + rect.width / 2;
+                touchJoystick.current.startY = rect.top + rect.height / 2;
                 touchJoystick.current.touchId = touch.identifier;
               }}
               onTouchMove={e => {
@@ -2006,35 +1676,34 @@ export default function GamePage() {
               </div>
             </div>
 
-            {/* Jump / Dive Button */}
+            {/* Right Jump Button */}
             <button
               onTouchStart={e => {
                 e.preventDefault();
-                handleJumpOrDive();
+                handleJump();
               }}
-              onClick={handleJumpOrDive}
+              onClick={handleJump}
               className="w-24 h-24 rounded-full bg-gradient-to-tr from-emerald-600 to-green-400 border-4 border-white shadow-[0_0_25px_rgba(16,185,129,0.7)] pointer-events-auto active:scale-90 transition-transform flex flex-col items-center justify-center text-white font-black"
             >
               <span className="text-2xl">⬆️</span>
               <span className="text-xs uppercase tracking-wider">PULAR</span>
             </button>
           </div>
-        </div>
+        </>
       )}
 
-      {/* ============================================================== */}
-      {/* 6. VICTORY SCREEN MODAL (Matching Scene3.unity)                */}
-      {/* ============================================================== */}
+      {/* VICTORY MODAL (Matching Scene3.unity / Arena Clash Result Modal) */}
       {activeScreen === 'victory' && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/85 backdrop-blur-md z-50 p-4">
           <div className="relative w-full max-w-[380px] bg-[#0c3e7a] border-4 border-black rounded-3xl p-6 shadow-2xl flex flex-col items-center">
+            {/* Top Crown Avatar Badge */}
             <div className="absolute -top-12 w-24 h-24 rounded-full border-4 border-black overflow-hidden bg-pink-500 shadow-2xl">
               <img src={profile.avatar} alt="" className="w-full h-full object-cover" />
             </div>
 
             <div className="w-[110%] -mx-4 mt-8 py-2 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-500 border-y-3 border-black text-center shadow-lg transform -rotate-1">
               <h3 className="text-white text-xl font-black uppercase tracking-wider">
-                CURSO CONCLUÍDO!
+                1º LUGAR - VITÓRIA!
               </h3>
             </div>
 
@@ -2043,67 +1712,33 @@ export default function GamePage() {
             <div className="w-full bg-blue-950/90 border-2 border-blue-400 rounded-2xl p-4 flex flex-col gap-2.5 mb-5 shadow-inner">
               <div className="flex justify-between items-center text-sm">
                 <span className="text-slate-300 font-bold uppercase">Tempo Final:</span>
-                <span className="text-white font-mono font-black text-base">{formatTime(elapsedSeconds)}</span>
+                <span className="text-white font-black text-base">{finalTime}</span>
               </div>
-              <div className="flex justify-between items-center text-sm border-t border-white/10 pt-2">
+              <div className="flex justify-between items-center text-sm">
                 <span className="text-slate-300 font-bold uppercase">Moedas Coletadas:</span>
-                <span className="text-amber-400 font-mono font-black text-base">🪙 {score}</span>
+                <span className="text-amber-400 font-black text-base">+{coinsCollected}</span>
               </div>
-              <div className="flex justify-between items-center text-sm border-t border-white/10 pt-2">
-                <span className="text-emerald-400 font-black uppercase">Prêmio Recebido:</span>
-                <span className="text-emerald-400 font-mono font-black text-xl">+ R$ {winnings.toFixed(2)}</span>
+              <div className="h-px bg-white/20 my-1" />
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-emerald-300 font-bold uppercase">Prêmio Conquistado:</span>
+                <span className="text-emerald-400 font-black text-lg">
+                  R$ {(selectedFee * (activeTab === 'x1' ? 1.9 : activeTab === 'trio' ? 2.7 : 4.2)).toFixed(2)}
+                </span>
               </div>
             </div>
 
             <div className="w-full flex flex-col gap-2.5">
               <button
                 onClick={() => startRace(selectedFee)}
-                className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 text-white rounded-2xl border-3 border-black shadow-[0_5px_0_#000] active:translate-y-1 active:shadow-none text-xl uppercase tracking-wider font-black"
+                className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 border-3 border-black rounded-xl text-white font-black text-base uppercase tracking-wider shadow-lg active:scale-95 transition-transform"
               >
                 Jogar Novamente
               </button>
               <button
                 onClick={() => setActiveScreen('lobby')}
-                className="w-full py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl border-2 border-black text-sm uppercase tracking-wider font-bold"
+                className="w-full py-3 bg-blue-800 hover:bg-blue-700 border-2 border-black rounded-xl text-white font-bold text-sm uppercase tracking-wider transition-colors"
               >
-                Voltar ao Lobby
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ============================================================== */}
-      {/* 7. GAME OVER MODAL (FallReset.cs / Out of Lives)               */}
-      {/* ============================================================== */}
-      {activeScreen === 'gameover' && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/85 backdrop-blur-md z-50 p-4">
-          <div className="relative w-full max-w-[360px] bg-[#1e1028] border-4 border-red-600 rounded-3xl p-6 shadow-2xl flex flex-col items-center text-center">
-            <span className="text-6xl mb-2">💥</span>
-            <h3 className="text-2xl font-black text-red-500 uppercase tracking-wider mb-2">
-              Fim de Jogo!
-            </h3>
-            <p className="text-slate-300 text-xs mb-4">
-              Você caiu no vácuo e suas vidas acabaram. Supere os obstáculos para chegar até a linha de chegada!
-            </p>
-
-            <div className="w-full bg-black/50 border border-white/10 rounded-xl p-3 mb-5 text-sm flex justify-between">
-              <span className="text-slate-400 font-bold uppercase">Progresso:</span>
-              <span className="text-yellow-400 font-black font-mono">{courseProgress}%</span>
-            </div>
-
-            <div className="w-full flex flex-col gap-2.5">
-              <button
-                onClick={() => startRace(selectedFee)}
-                className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-yellow-500 text-black rounded-2xl border-3 border-black shadow-[0_4px_0_#000] active:translate-y-1 active:shadow-none text-lg uppercase font-black"
-              >
-                Tentar Novamente
-              </button>
-              <button
-                onClick={() => setActiveScreen('lobby')}
-                className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl border-2 border-black text-sm uppercase font-bold"
-              >
-                Voltar ao Lobby
+                Voltar ao Menu
               </button>
             </div>
           </div>
