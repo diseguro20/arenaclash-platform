@@ -1385,10 +1385,11 @@ export default function GamePage() {
             })
               .then(res => (res.ok ? res.json() : null))
               .then(data => {
-                if (data?.saldo_atualizado !== undefined) {
+                const novoSaldo = data?.saldo_novo ?? data?.saldo_atualizado;
+                if (novoSaldo !== undefined) {
                   setProfile(prev => ({
                     ...prev,
-                    saldo: Number(data.saldo_atualizado),
+                    saldo: Number(novoSaldo),
                     victories: prev.victories + 1
                   }));
                 }
