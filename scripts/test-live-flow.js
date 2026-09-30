@@ -91,10 +91,11 @@ async function runTest() {
   console.log('Deposit Status:', depRes.statusCode);
   console.log('Deposit Body:', depRes.body);
 
-  console.log('\n--- 4. Testing Game Start Session ---');
+  console.log('\n--- 4. Testing Game Start Session (Demo Mode) ---');
   const gameStartRes = await post(`${BASE_URL}/api/game/iniciar`, {
     aposta: 5,
-    tipo_moeda: 'ouro'
+    modalidade: 'treino',
+    personagem: 1
   }, cookies);
   console.log('Game Start Status:', gameStartRes.statusCode);
   console.log('Game Start Body:', gameStartRes.body);
