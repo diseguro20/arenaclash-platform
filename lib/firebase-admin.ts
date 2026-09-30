@@ -4,6 +4,47 @@ import { getAuth } from 'firebase-admin/auth';
 import fs from 'fs';
 import path from 'path';
 
+function parseServiceAccount(raw: string): any {
+  if (!raw) throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON não configurada.');
+  
+  let candidate = raw.trim();
+  
+  // 1. Direct JSON parse
+  try {
+    const p = JSON.parse(candidate);
+    if (typeof p === 'object' && p !== null) return p;
+    if (typeof p === 'string') return parseServiceAccount(p);
+  } catch (e) {}
+
+  // 2. Unescape \" (literal escaped quotes from .env strings)
+  try {
+    const unescaped = candidate.replace(/\\"/g, '"');
+    const p = JSON.parse(unescaped);
+    if (typeof p === 'object' && p !== null) return p;
+    if (typeof p === 'string') return parseServiceAccount(p);
+  } catch (e) {}
+
+  // 3. Strip outer quotes and unescape
+  try {
+    let clean = candidate;
+    if ((clean.startsWith('"') && clean.endsWith('"')) || (clean.startsWith("'") && clean.endsWith("'"))) {
+      clean = clean.slice(1, -1);
+    }
+    const unescaped = clean.replace(/\\"/g, '"');
+    const p = JSON.parse(unescaped);
+    if (typeof p === 'object' && p !== null) return p;
+  } catch (e) {}
+
+  // 4. Base64
+  try {
+    const decoded = Buffer.from(candidate, 'base64').toString('utf8');
+    const p = JSON.parse(decoded);
+    if (typeof p === 'object' && p !== null) return p;
+  } catch (e) {}
+
+  throw new Error('Falha ao interpretar credenciais Firebase Service Account.');
+}
+
 function getServiceAccount(): ServiceAccount {
   const localFile = path.join(process.cwd(), 'service-account.json');
   if (fs.existsSync(localFile)) {
@@ -27,15 +68,7 @@ function getServiceAccount(): ServiceAccount {
     throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON não configurada.');
   }
 
-  let parsed: any;
-  try {
-    parsed = JSON.parse(raw);
-    if (typeof parsed === 'string') {
-      parsed = JSON.parse(parsed);
-    }
-  } catch {
-    parsed = JSON.parse(JSON.parse(raw));
-  }
+  const parsed = parseServiceAccount(raw);
 
   return {
     projectId: parsed.projectId ?? parsed.project_id ?? 'saltocash-platform-2026',
